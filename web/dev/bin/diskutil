@@ -1,0 +1,8 @@
+#!/bin/sh
+# The test stand-in for diskutil. An eject takes the pretend volume away, as the real one does.
+if [ "$1" = eject ] && [ -f "$FAKE_IPOD/fault" ] && grep -q eject-busy "$FAKE_IPOD/fault"; then
+    echo "Volume failed to eject: one or more programs may be using it" >&2
+    exit 1
+fi
+[ "$1" = eject ] && mv "$FAKE_IPOD/mount/iPod_Control" "$FAKE_IPOD/mount/ejected-iPod_Control"
+echo "Disk ejected"

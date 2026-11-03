@@ -1,0 +1,9 @@
+#!/bin/sh
+# The test stand-in for the file dialog: "picks" what is in $FAKE_IPOD/choose, or Cancel when there is nothing.
+if [ -f "$FAKE_IPOD/fault" ] && grep -q no-dialog "$FAKE_IPOD/fault"; then
+    echo "execution error: Not authorized to send Apple events to System Events. (-1743)" >&2
+    exit 1
+fi
+if [ -f "$FAKE_IPOD/choose" ]; then cat "$FAKE_IPOD/choose"; exit 0; fi
+echo "execution error: User canceled. (-128)" >&2
+exit 1

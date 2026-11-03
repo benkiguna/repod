@@ -1,0 +1,3 @@
+#!/bin/sh
+# The test stand-in for open: no Finder window during a test.
+exit 0
