@@ -1,4 +1,7 @@
-# RePod
+<h1><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="web/assets/wordmark-dark.svg">
+  <img src="web/assets/wordmark-light.svg" alt="RePod" width="186">
+</picture></h1>
 
 **Manage the music on an iPod from a web page on your Mac, without iTunes or Apple Music.**
 

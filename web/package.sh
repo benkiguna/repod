@@ -59,8 +59,8 @@ security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates
 icons="$work/icon.iconset"
 rm -rf "$icons"; mkdir -p "$icons"
 for size in 16 32 128 256 512; do
-    sips -s format png -z $size $size web/assets/apple-touch-icon.png --out "$icons/icon_${size}x$size.png" > /dev/null
-    sips -s format png -z $((size * 2)) $((size * 2)) web/assets/apple-touch-icon.png --out "$icons/icon_${size}x$size@2x.png" > /dev/null
+    sips -s format png -z $size $size web/assets/app-icon.png --out "$icons/icon_${size}x$size.png" > /dev/null
+    sips -s format png -z $((size * 2)) $((size * 2)) web/assets/app-icon.png --out "$icons/icon_${size}x$size@2x.png" > /dev/null
 done
 iconutil -c icns "$icons" -o "$resources/icon.icns"
 

@@ -38,7 +38,7 @@
   /* Space (4 px grid), radii, type */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
   /* The panel floats, so it stays a modest size: the iPod, then the dock (2.16 widths in all), never more than the height allows. */
-  --side: clamp(240px, min((100vh - 56px) / 1.675, 18vw), 320px);
+  --side: clamp(240px, min((100vh - 128px) / 1.675, 18vw), 320px);  /* 128: the wordmark sits above the iPod, level with the title */
   --sb: calc(var(--side) + var(--s5) * 2);  /* what the iPod takes from the left, with room to float */
   --rail: calc(76px + var(--s5) * 2);  /* what the Manage rail takes from the right */
   --r-control: 8px; --r-group: 16px; --r-art: 8px; --r-panel: 22px; --r-pill: 999px;
@@ -78,7 +78,7 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
-html.no-swipe, html.no-swipe body { overscroll-behavior-x: none; }  /* Cover Flow: a swipe moves the covers, never the page */
+html, body { overscroll-behavior-x: none; }  /* a sideways swipe never goes Back or Forward, which would leave the app (Safari: holdSwipe) */
 /* One backdrop, used by the window and by the strip under the toolbar so the two match exactly: a soft ambient gradient for the glass
    to sit on, plus a very faint grain baked in (so dark gradients dither instead of banding, with no full-window overlay to blend). */
 :root { --stage:
@@ -119,7 +119,7 @@ button, input { font: inherit; color: inherit; }
   display: flex; flex-direction: column; gap: var(--s4);
 }
 .content { --bar: 76px; --gut: 40px;  /* side margin: room for the A-Z rail beside the list */
-  /* The content is centred on the window: as much margin on the right as the panel takes on the left, given up only as far as a narrow window needs. */
+  /* Until the page's script runs: the content centred on the window. Then fit() (index.html) sets --edge-l and --edge-r to what the panels really leave. */
   --inset: max(var(--rail), min(var(--sb) + var(--gut), 100vw - var(--sb) - var(--gut) - 640px));
   /* Where the content starts and ends. The iPod and the Manage rail can trade sides, and these trade with them. */
   --edge-l: calc(var(--sb) + var(--gut)); --edge-r: var(--inset);
@@ -218,6 +218,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .segmented { display: inline-flex; border-radius: var(--r-pill); padding: 2px; gap: 2px; flex-wrap: wrap; }
 .segmented button { border: 0; background: none; border-radius: var(--r-pill); padding: 4px var(--s3); cursor: pointer; font-size: 13px; font-weight: 500; color: var(--label-2); }
 .segmented button[aria-pressed=true] { background: var(--bg-grouped); color: var(--label); box-shadow: 0 .5px 3px rgba(0, 0, 0, .25); }
+:root[data-theme="dark"] .segmented button[aria-pressed=true] { background: rgba(120, 120, 128, .45); }  /* lighter than its track, as a raised segment is in the dark */
 .segmented .n { opacity: .6; margin-left: 5px; font-variant-numeric: tabular-nums; }
 
 /* ----------------------------------------------------------------- lists */
@@ -509,6 +510,11 @@ dialog.wide { width: min(560px, calc(100vw - 32px)); }
 .logo { display: block; }
 .lg-body { fill: var(--lg-body); } .lg-screen { fill: var(--lg-screen); } .lg-ink { fill: var(--lg-ink); } .lg-hl { fill: var(--lg-hl); }
 .lg-hlink { fill: var(--lg-hlink); } .lg-wheel { fill: var(--lg-wheel); } .lg-center { fill: var(--lg-center); } .lg-dot { fill: var(--lg-dot); }
+/* the wordmark: assets/wordmark-light.svg and wordmark-dark.svg, as tokens */
+:root { --wm-ink: #16181D; --wm-ring: #2A2C30; --wm-btn: #0B0C0E; --wm-gl: #C4C7CC; }
+:root[data-theme="dark"] { --wm-ink: #F4F4F1; --wm-ring: #C9CBCF; --wm-btn: #FFFFFF; --wm-gl: #FFFFFF; }
+.wordmark { display: block; aspect-ratio: 371 / 150; height: auto; }
+.wm-ink { stroke: var(--wm-ink); } .wm-ring { fill: var(--wm-ring); } .wm-btn { fill: var(--wm-btn); } .wm-gl { stroke: var(--wm-gl); } .wm-glf { fill: var(--wm-gl); }
 .lg-chev, .lg-hlchev { fill: none; stroke-width: .7; stroke-linecap: round; stroke-linejoin: round; }
 .lg-chev { stroke: var(--lg-ink); } .lg-hlchev { stroke: var(--lg-hlink); }
 
@@ -545,6 +551,13 @@ tr.gap td { height: auto; padding: 0; border: 0; }  /* stands for the rows that 
 tbody tr.gap:hover { background: none; }
 table.lib td, table.lib td.named { max-width: none; }
 table.lib th.pick, table.lib td.pick { width: 44px; padding-right: 0; }
+/* The line between two headings resizes them: it shows while the pointer is over the headings. */
+table.lib th[data-col] .col-grip { position: absolute; top: 0; bottom: 0; right: 0; width: 9px; cursor: col-resize; touch-action: none; z-index: 1; }
+table.lib th[data-col] .col-grip::after { content: ''; position: absolute; top: 25%; bottom: 25%; right: 0; width: 1px; border-radius: 1px; background: var(--separator); opacity: 0; transition: opacity var(--ease-in); }
+table.lib thead:hover .col-grip::after { opacity: 1; }
+table.lib .col-grip:hover::after, table.lib .col-grip.on::after { top: 15%; bottom: 15%; width: 2px; background: var(--accent); opacity: 1; }
+table.lib th[data-col]:has(+ th.row-act) .col-grip, table.lib th[data-col]:last-child .col-grip { display: none; }  /* the last column has nothing to give to */
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none; }
 table.lib th.num { width: 76px; }
 table.lib td.num, table.lib th.num { padding-left: var(--s1); padding-right: var(--s2); }
 table.lib th.row-act, table.lib td.row-act { width: 72px; padding: 0 var(--s2) 0 0; text-align: right; }
@@ -683,7 +696,6 @@ td.pick input, th.pick input, .tile .pick { accent-color: var(--accent); }
 .dock.slim nav .pip { top: -3px; right: -4px; min-width: 14px; height: 14px; line-height: 14px; padding: 0 3px; font-size: 9px; }
 .dock.slim .dock-row { grid-template-columns: 30px; margin-top: 0; padding-top: 6px; }
 .dock.slim #tidy { width: 30px; }
-.app.paired.swapped .index.v { right: auto; left: calc(var(--edge-l) - 29px); }
 @media (max-width: 760px) { .ipod, .dock { translate: none !important; } .bay, #tidy { display: none; } }  /* no room to arrange anything: the phone layout stands */
 
 .screen { position: absolute; left: 8.9%; width: 82.2%; top: 9.18%; aspect-ratio: 4 / 3; display: flex; flex-direction: column; border-radius: calc(4 * var(--px)); overflow: hidden;
@@ -754,10 +766,24 @@ td.pick input, th.pick input, .tile .pick { accent-color: var(--accent); }
 .dock nav button:focus-visible .tile-icon { outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent); }
 .dock .tile-icon svg.i { width: 17px; height: 17px; }
 .dock nav .pip { position: absolute; top: -4px; right: -7px; margin: 0; min-width: 15px; height: 15px; line-height: 14px; padding: 0 3px; font-size: 9px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; color: var(--orange); background: var(--bg-grouped); box-shadow: inset 0 0 0 .5px var(--separator); }
-.mode-mark { display: flex; align-items: center; justify-content: center; gap: 3px; font-size: 9px; line-height: 12px; font-weight: 500; letter-spacing: -.01em; color: var(--label-2); cursor: pointer; white-space: nowrap; }
+.mode-mark { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 100%; padding: 4px 4px 2px; border: 0; background: none; font: inherit; font-size: 9px; line-height: 12px; font-weight: 500; letter-spacing: -.01em; color: var(--label-2); cursor: pointer; white-space: nowrap; }
 .mode-mark.read { color: var(--orange); }
 .mode-mark[hidden] { display: none; }
-.mode-mark svg.i { width: 10px; height: 10px; }
+.mode-mark:disabled { cursor: default; opacity: .6; }
+/* A small switch: on is Write mode, as a switch is on when it lets something happen. */
+.mm-switch { position: relative; flex: none; width: 16px; height: 9px; border-radius: 5px; background: var(--label-3); transition: background-color var(--ease-out); }
+.mm-switch::after { content: ''; position: absolute; top: 1px; left: 1px; width: 7px; height: 7px; border-radius: 50%; background: #fff; box-shadow: 0 .5px 1px rgba(0, 0, 0, .3); transition: translate var(--ease-out); }
+.mode-mark[aria-checked=true] .mm-switch { background: var(--green, #34c759); }
+.mode-mark[aria-checked=true] .mm-switch::after { translate: 7px 0; }
+.mode-mark.read .mm-switch { background: color-mix(in srgb, var(--orange) 70%, transparent); }
+.mode-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+#pin.on { color: var(--accent); }
+/* Cover Flow by hand: the covers can be dragged. */
+.content.flowmode .flow-stage { cursor: grab; touch-action: pan-y; }
+.content.flowmode .flow-stage img { -webkit-user-drag: none; user-select: none; }
+body.flow-dragging, body.flow-dragging * { cursor: grabbing !important; }
+/* Pinned, the panels don't move: nothing on them looks as if it could be picked up. */
+.app.pinned .ipod, .app.pinned .dock, .app.pinned .screen-bar, .app.pinned .storage { cursor: auto; }
 .dock-row { display: grid; grid-template-columns: 28px 28px; gap: 2px; padding-top: 6px; border-top: .5px solid var(--separator); }
 #tidy { grid-column: 1 / -1; width: 100%; }
 #theme { display: contents; }
@@ -824,16 +850,16 @@ th { background: var(--pane-solid); }
 
 /* ------------------------------------------------------------- the board
    An album on the board reads like the iPod's own screen: a title bar, plain rows, the selection a solid blue bar. */
-.content.boardmode { --edge-r: var(--rail); }
-.app.swapped .content.boardmode { --edge-l: var(--rail); }
 .content.boardmode .scroll { overflow: hidden; padding-bottom: var(--s4); }
 .content.boardmode::before { display: none; }
 .content.boardmode .index.v { display: none; }
 .content.boardmode .page { height: 100%; }
+.content.boardmode .toolbar .search { flex-basis: 160px; }  /* it searches the list on the left: the actions keep one row */
 .board { display: flex; gap: var(--s4); height: 100%; min-height: 0; }
-.shelf { flex: none; width: 280px; display: flex; flex-direction: column; gap: var(--s2); min-height: 0; }
+.shelf { flex: none; width: clamp(280px, 27%, 360px); display: flex; flex-direction: column; gap: var(--s2); min-height: 0; }
 .shelf .segmented { display: flex; flex-wrap: nowrap; background-color: var(--fill); background-image: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
-.shelf .segmented button { flex: 1; padding: 4px 0; font-size: 12px; white-space: nowrap; }
+.shelf .segmented button { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; padding: 4px 2px; font-size: 12px; line-height: 1; white-space: nowrap; }
+.shelf .segmented .n { margin-left: 4px; font-size: 11px; line-height: 1; }
 .sh-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .sh-list, .hints, .box-songs { list-style: none; margin: 0; padding: 0; }
 .sh { height: 48px; display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s2); border-radius: 10px; cursor: default; user-select: none; -webkit-user-select: none; }
@@ -847,7 +873,7 @@ th { background: var(--pane-solid); }
 .sh-none { padding: var(--s4) var(--s2); color: var(--label-2); font-size: 13px; }
 .sh-h { margin: var(--s4) var(--s2) 2px; font-size: 12px; font-weight: 600; color: var(--label-2); }
 .sh-p { margin: 0 var(--s2) var(--s2); font-size: 12px; color: var(--label-2); }
-.sh-place { display: grid; gap: 2px; padding: var(--s2); margin-bottom: var(--s2); font-size: 12px; border-bottom: .5px solid var(--separator); }
+.sh-place { display: grid; gap: 2px; padding: var(--s2) var(--s3) var(--s3); margin-bottom: var(--s2); font-size: 12px; border-radius: 10px; background: var(--fill); }
 .sh-place span { color: var(--label-2); }
 .sh-place .row { margin-top: var(--s1); }
 .hint { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s2); border-radius: 10px; cursor: default; }
@@ -856,8 +882,11 @@ th { background: var(--pane-solid); }
 .hint-t { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; line-height: 1.3; }
 .hint-t b { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint-t span { color: var(--label-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.stage { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: var(--s3); overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-bottom: var(--s1); }
-.box { flex: none; width: 300px; max-height: 100%; display: flex; flex-direction: column; min-height: 0; border-radius: 14px; overflow: hidden; background-color: var(--pane, var(--content-fill)); box-shadow: inset 0 0 0 .5px var(--separator); transition: box-shadow var(--ease-out); }
+/* The open albums share the width, up to 480 each; past what fits, the row scrolls with each album --box-w wide (sizeBoxes), a whole number of them to the row.
+   They stand the full height, so every one is as easy to drop on. */
+.stage { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: var(--s3); overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-bottom: var(--s1); scroll-snap-type: x proximity; }
+.stage > .box { scroll-snap-align: start; }  /* the row comes to rest on an album's edge, not a sliver of one */
+.box { flex: 1 0 var(--box-w, 300px); min-width: var(--box-w, 280px); max-width: max(480px, var(--box-w, 0px)); display: flex; flex-direction: column; min-height: 0; border-radius: 14px; overflow: hidden; background-color: var(--pane, var(--content-fill)); box-shadow: inset 0 0 0 .5px var(--separator); transition: box-shadow var(--ease-out); }
 .box.drop-over { box-shadow: inset 0 0 0 2px var(--accent); }
 .box-h { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); border-bottom: .5px solid var(--separator); }
 .box-h .thumb { width: 44px; height: 44px; }
@@ -870,9 +899,12 @@ th { background: var(--pane-solid); }
 .box-h .act { width: 24px; height: 24px; flex: none; color: var(--label-2); }
 .box-h .act svg { width: 13px; height: 13px; }
 .box-h .act svg.i { stroke-width: 1.6; }
-.box-facts { display: flex; align-items: center; gap: var(--s3); padding: 4px var(--s3); font-size: 11px; color: var(--label-2); border-bottom: .5px solid var(--separator); }
+.box-facts { display: flex; align-items: center; gap: var(--s3); min-height: 30px; padding: 0 var(--s3); font-size: 11px; color: var(--label-2); border-bottom: .5px solid var(--separator); }
+.box-facts label.tick { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; }
+.box-facts label.tick input { width: 13px; height: 13px; }
+.box-facts label.tick input:checked::after { width: 6px; height: 3px; border-width: 0 0 1.25px 1.25px; }
 .box-facts > span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.box-year { display: inline-flex; align-items: center; gap: 4px; }
+.box-year { display: inline-flex; align-items: center; gap: 2px; }
 .box-year input { width: 38px; border: 0; background: none; padding: 1px 2px; border-radius: 4px; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--label); outline: none; }
 .box-year input:hover, .box-year input:focus { background: var(--fill); }
 .box-warn { padding: 6px var(--s3); font-size: 12px; line-height: 1.3; color: var(--orange); border-bottom: .5px solid var(--separator); }
@@ -899,7 +931,11 @@ th { background: var(--pane-solid); }
 .box-new { display: none; flex: none; width: 140px; height: 96px; flex-direction: column; align-items: center; justify-content: center; gap: var(--s1); border-radius: 14px; font-size: 12px; font-weight: 500; color: var(--label-2); box-shadow: inset 0 0 0 1px var(--separator); }
 body.dragging .box-new { display: flex; }
 .box-new.drop-over { color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
-.stage > .empty { flex: 1; align-self: flex-start; max-width: 340px; margin: var(--s6) auto; }
+.stage-empty { flex: 1; align-self: stretch; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s2); padding: var(--s6); border-radius: 14px; text-align: center; color: var(--label-2); box-shadow: inset 0 0 0 1px var(--separator); }
+.stage-empty svg.i { width: 28px; height: 28px; stroke-width: 1.2; margin-bottom: var(--s1); }
+.stage-empty h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--label); }
+.stage-empty p { margin: 0; max-width: 300px; font-size: 13px; line-height: 1.4; }
+body.dragging .stage-empty { display: none; }
 .sh.drop-over { box-shadow: inset 0 0 0 2px var(--accent); }
 #dragGhost { position: fixed; left: 0; top: 0; z-index: 50; display: flex; align-items: center; gap: var(--s2); max-width: 260px; padding: 6px var(--s3) 6px 6px; border-radius: 10px; font-size: 13px; pointer-events: none; background-color: var(--glass-sheet); box-shadow: inset 0 0 0 .5px var(--glass-outline), var(--glass-shadow); }
 #dragGhost b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
@@ -975,6 +1011,14 @@ tr.goes td:not(.bk-star):not(.bk-act) { color: var(--label-3); }
 .copy-row .copy-t { min-width: 240px; }
 @media (max-width: 1100px) { table.bk th:nth-child(4), table.bk td:nth-child(4) { display: none; } }  /* the buttons stay */
 .about p { margin: 0 0 var(--s3); white-space: normal; }
+.about .wordmark { width: 148px; margin: var(--s2) 0 var(--s5); }
+.sheet h2:empty, .sheet h2:empty + p:empty { display: none; }
+/* The wordmark: the window's top left corner, level with the page title, whichever side the iPod and the rail are on; it opens About.
+   Below the panels (z 8), so a panel dragged over it passes in front. */
+.brand { position: absolute; top: 18px; left: var(--s5); z-index: 7; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 6px; }
+.brand .wordmark { height: 40px; width: auto; }
+.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 760px) { .brand { display: none; } }
 .about a { color: var(--accent); }
 
 /* Health: what needs a look is on show, what's fine is folded. */

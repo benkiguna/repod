@@ -10,12 +10,15 @@
 <link rel="shortcut icon" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 <script>
+  window.PINNED = null;  // the server writes in the preferences pinned on this Mac
+  // Pinned preferences come first: this browser's own are replaced with them before anything reads one.
+  (function () { var p = window.PINNED; if (!p) return; try { for (var k in p.prefs) localStorage.setItem(k, p.prefs[k]); } catch (e) {} })();
   // The theme is applied before first paint so there is no flash. Auto follows the Mac.
   (function () {
     var pref = 'auto', mq = matchMedia('(prefers-color-scheme: dark)');
     try { pref = localStorage.getItem('theme') || 'auto'; } catch (e) {}
     function apply() { document.documentElement.dataset.theme = pref === 'auto' ? (mq.matches ? 'dark' : 'light') : pref; }
-    window.setTheme = function (p) { pref = p; try { localStorage.setItem('theme', p); } catch (e) {} apply(); };
+    window.setTheme = function (p) { pref = p; try { localStorage.setItem('theme', p); } catch (e) {} apply(); if (window.prefChanged) window.prefChanged(); };
     window.getTheme = function () { return pref; };
     mq.addEventListener('change', apply); apply();
   })();
@@ -25,8 +28,16 @@
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
 <clipPath id="logoScr"><rect x="5.5" y="9.5" width="50.8" height="38.1" rx="1.6"/></clipPath>
+<!-- The wordmark (assets/wordmark.svg), its colours the --wm-* tokens so it follows the page's light/dark choice. -->
+<symbol id="wordmark" viewBox="0 0 371 150"><g class="wm-ink" fill="none" stroke-width="18">
+  <path d="M9 40V110M9 79A30 30 0 0 1 39 49H48"/><path d="M67 75H119A26 26 0 1 0 111.4 93.4"/><path d="M147 40V140"/>
+  <circle cx="173" cy="75" r="26"/><circle cx="335" cy="75" r="26"/><path d="M361 10V110"/></g>
+  <circle class="wm-ring" cx="254" cy="75" r="36"/><circle class="wm-btn" cx="254" cy="75" r="14.5"/>
+  <g transform="translate(254 75) scale(0.69) translate(-148 -60)"><path class="wm-gl" d="M143 18.6h10M143 22h10M143 25.4h10" fill="none" stroke-width="1.8" stroke-linecap="round"/>
+  <path class="wm-glf" d="M181.5 55.5L186 60L181.5 64.5ZM186 55.5L190.5 60L186 64.5ZM190.5 55.5h1.6v9h-1.6ZM114.5 55.5L110 60L114.5 64.5ZM110 55.5L105.5 60L110 64.5ZM103.9 55.5h1.6v9h-1.6ZM141.5 93.5L147.5 98L141.5 102.5ZM150 93.5h1.6v9h-1.6ZM153.4 93.5h1.6v9h-1.6Z"/></g></symbol>
 </defs></svg>
 <div class="app">
+  <button class="brand" id="brand" title="About RePod" aria-label="About RePod"><svg class="wordmark" aria-hidden="true"><use href="#wordmark"/></svg></button>
   <aside class="sidebar">
     <section class="ipod" aria-label="iPod">
       <div class="screen" id="screen">
@@ -45,8 +56,8 @@
   </aside>
   <aside class="dock" aria-label="Manage">
     <nav id="navManage"></nav>
-    <div class="dock-row"><button class="btn icon" id="reload"></button><button class="btn icon" id="eject"></button><div id="theme"></div><button class="btn icon" id="sound"></button><button class="btn icon" id="tidy" title="Put everything back" aria-label="Put everything back" hidden></button><button class="btn icon" id="health" data-route="health" title="Health" aria-label="Health"></button><button class="btn icon" id="about" title="About and licence" aria-label="About and licence"></button></div>
-    <div class="mode-mark" id="modeMark" role="status" hidden></div>
+    <div class="dock-row"><button class="btn icon" id="reload"></button><button class="btn icon" id="eject"></button><div id="theme"></div><button class="btn icon" id="sound"></button><button class="btn icon" id="tidy" title="Put everything back" aria-label="Put everything back" hidden></button><button class="btn icon" id="health" data-route="health" title="Health" aria-label="Health"></button><button class="btn icon" id="about" title="About and licence" aria-label="About and licence"></button><button class="btn icon" id="pin"></button></div>
+    <button class="mode-mark" id="modeMark" role="switch" hidden></button>
   </aside>
 
   <section class="content">
@@ -96,6 +107,8 @@ const ICONS = {
   moon: '<path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/>',
   auto: '<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor"/>',
   check: '<path d="M3.5 8.5l3 3 6-7"/>',
+  pin: '<path stroke-linejoin="round" d="M5.6 2.5h4.8M6.4 2.5v3.8L4.2 9h7.6L9.6 6.3V2.5M8 9v4.5"/>',
+  pinned: '<path fill="currentColor" stroke-linejoin="round" d="M5.6 2.5h4.8M6.4 2.5v3.8L4.2 9h7.6L9.6 6.3V2.5z"/><path d="M8 9v4.5"/>',
   pulse: '<path d="M1.8 8.4h2.9l1.6-4 2.6 7.6 1.7-3.6h3.6"/>',
   info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.4v3.6M8 5.1v.01"/>',
   star: '<path stroke-linejoin="round" d="M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9L2.4 6.3l3.9-.5z"/>',
@@ -386,9 +399,24 @@ const locked = () => state.job.running || offline();  // what a button that need
 const picked = new Set();  // ticked song ids in Songs, album keys in Albums, names in Artists; only ever one screen's
 let lastPick = null;
 /* The click wheel. As on an iPod it has two levels: in the menu it moves the highlight; the centre goes in, and then it drives what is on screen. Menu comes back. */
-let wheelCursor = LIBRARY.includes(route) ? route : 'albums', wheelLevel = 'menu';
+let wheelCursor = LIBRARY.includes(route) ? route : null, lastLibrary = wheelCursor || 'albums', wheelLevel = 'menu';  // no highlight while the page shows something the menu doesn't list
 
 /* Every call to the server goes through here, and every failure ends here: one sheet in plain words, and an error that says it has been shown (see `unhandledrejection`). `quiet` is for polling, which has its own way of saying so. */
+/* The pin. Pinned, the iPod and the rail stay where they are, and the page's preferences (the layout, the theme, the sounds, the views, sorts and column
+   widths) are kept on this Mac as well as in this browser, so they come back whatever address the page is served at. Unpinned, the panels move again. */
+const PREF_KEYS = ['theme', 'sound', 'clickSound', 'libView', 'coverView', 'sort', 'colWidths', 'addLookup', 'panels'];
+let pinned = !!window.PINNED, prefTimer = null;
+function sendPrefs() {
+  const prefs = {}; for (const k of PREF_KEYS) { try { const v = localStorage.getItem(k); if (v !== null) prefs[k] = v; } catch (e) {} }
+  if (!demo) api('/api/prefs', { pinned, prefs }, { quiet: true }).catch(() => {});
+}
+function prefChanged() { if (!pinned) return; clearTimeout(prefTimer); prefTimer = setTimeout(sendPrefs, 400); }
+window.prefChanged = prefChanged;
+let relayout = () => {};  // the panels' own: what depends on the pin is drawn again
+function togglePin() {
+  pinned = !pinned; document.querySelector('.app').classList.toggle('pinned', pinned); relayout(); sendPrefs(); renderFrame();
+  toast(pinned ? 'Pinned. The iPod and the rail stay where they are, and your preferences are kept on this Mac.' : 'Unpinned. The iPod and the rail can be moved again.');
+}
 const SERVER_GONE = 'The page can’t reach its server. If you closed the Terminal window or pressed Ctrl-C, start it again. Nothing was changed by this.';
 async function api(path, body, { quiet = false } = {}) {
   const fail = async (title, text) => { const e = new Error(text); e.shown = !quiet; if (!quiet) await notify(title, text); throw e; };
@@ -401,7 +429,7 @@ async function api(path, body, { quiet = false } = {}) {
   return data;
 }
 addEventListener('unhandledrejection', ev => { if (ev.reason?.shown) ev.preventDefault(); else toast('Something went wrong on this page. Reload it if it stops responding.'); });
-addEventListener('error', () => toast('Something went wrong on this page. Reload it if it stops responding.'));
+addEventListener('error', ev => { if (/ResizeObserver loop/.test(ev.message)) return; toast('Something went wrong on this page. Reload it if it stops responding.'); });  // the first is a layout notice, not a failure
 const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 const fmtLong = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : fmtTime(s);
 const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -430,7 +458,7 @@ function renderDevice() {  // the iPod's screen: the only part that changes with
 function renderFrame() {
   const L = state.library, missing = L ? L.missingCount : 0;
   renderDevice();
-  $('wheel').setAttribute('aria-valuetext', ROUTES[wheelCursor].title);
+  $('wheel').setAttribute('aria-valuetext', ROUTES[wheelCursor ?? route].title);
   const item = k => {
     const r = ROUTES[k];
     const wrong = L ? L.hints.filter(h => h.level === 'fix').length + (L.outOfPlace.length ? 1 : 0) : 0, copies = L ? L.duplicates.sets.filter(x => x.kind !== 'maybe' && !keptBoth().has(x.key)).length : 0;
@@ -438,18 +466,20 @@ function renderFrame() {
       : k === 'grouping' ? (wrong ? `<span class="pip">${wrong}</span>` : '')
       : k === 'duplicates' ? (copies ? `<span class="pip">${copies}</span>` : '')
       : r.search && L && LIBRARY.includes(k) ? `<span class="count">${L[k].length.toLocaleString()}</span>` : '';
-    return `<button data-route="${k}" aria-label="${r.title}" ${r.short || !LIBRARY.includes(k) ? `title="${r.title}"` : ''} class="${k === wheelCursor && LIBRARY.includes(k) ? 'cursor' : ''}" ${route === k ? 'aria-current="page"' : ''}>${LIBRARY.includes(k) ? icon(r.icon) : `<span class="tile-icon">${icon(r.icon)}${tail}</span>`}<span class="label">${r.short || r.title}</span>${LIBRARY.includes(k) ? tail : ''}${LIBRARY.includes(k) ? '<span class="chev">›</span>' : ''}</button>`;
+    return `<button data-route="${k}" aria-label="${r.title}" ${r.short || !LIBRARY.includes(k) ? `title="${r.title}"` : ''} class="${k === wheelCursor ? 'cursor' : ''}" ${route === k ? 'aria-current="page"' : ''}>${LIBRARY.includes(k) ? icon(r.icon) : `<span class="tile-icon">${icon(r.icon)}${tail}</span>`}<span class="label">${r.short || r.title}</span>${LIBRARY.includes(k) ? tail : ''}${LIBRARY.includes(k) ? '<span class="chev">›</span>' : ''}</button>`;
   };
   $('navLibrary').innerHTML = ['albums', 'artists', 'songs'].map(item).join('');
   $('navManage').innerHTML = ['add', 'grouping', 'duplicates', 'covers', 'metadata', 'backups'].map(item).join('');
   const busy = state.job.running;
-  const mode = L && !offline() ? state.writing : null;
-  $('modeMark').hidden = !mode;
-  if (mode) {
-    $('modeMark').classList.toggle('read', !mode.allowed);
-    $('modeMark').onclick = () => go('health');
-    $('modeMark').title = mode.allowed ? `Changes can be written to this iPod, with a backup saved first.${state.developer ? ' Started with --developer: the lists of confirmed iPods are lifted, but the signature and the backups stay.' : ''}` : `This iPod can only be read, so nothing can be written to it${mode.why ? `: ${mode.why}` : '.'}`;
-    $('modeMark').innerHTML = `${icon(mode.allowed ? 'edit' : 'eye')}<span class="label">${mode.allowed ? 'Write mode' : 'Read mode'}</span>`;
+  const shown = L && !offline(), writes = shown && state.writing?.allowed !== false && !state.readMode;
+  $('modeMark').hidden = !shown;
+  if (shown) {
+    $('modeMark').classList.toggle('read', !writes); $('modeMark').disabled = busy;
+    $('modeMark').setAttribute('aria-checked', writes);
+    $('modeMark').title = state.readMode ? 'Read mode: nothing is written to the iPod. Click to switch to Write mode.'
+      : writes ? `Write mode: changes can be written to this iPod, with a backup saved first. Click to switch to Read mode.${state.developer ? ' The lists of confirmed iPods are lifted; the signature and the backups stay.' : ''}`
+      : `This iPod can only be read${state.writing?.why ? `: ${state.writing.why}.` : '.'} ${state.developer ? 'Click to see why.' : 'Click to allow writing to it.'}`;
+    $('modeMark').innerHTML = `<span class="mm-switch" aria-hidden="true"></span><span class="label">${writes ? 'Write mode' : 'Read mode'}</span>`;
   }
   $('reload').disabled = busy || reading || state.reading;
   $('eject').disabled = busy || reading || !L || offline();
@@ -462,6 +492,9 @@ function renderFrame() {
   $('health').innerHTML = icon('pulse') + (state.healthIssues ? '<i class="dot"></i>' : '');
   $('health').title = state.healthIssues ? `Health: ${state.healthIssues} to look at` : 'Health'; $('health').setAttribute('aria-label', $('health').title);
   if (route === 'health') $('health').setAttribute('aria-current', 'page'); else $('health').removeAttribute('aria-current');
+  $('pin').innerHTML = icon(pinned ? 'pinned' : 'pin'); $('pin').classList.toggle('on', pinned); $('pin').setAttribute('aria-pressed', pinned);
+  $('pin').title = pinned ? 'Pinned: the layout is locked and your preferences are kept on this Mac. Click to unpin.' : 'Pin the layout and keep your preferences on this Mac';
+  $('pin').setAttribute('aria-label', $('pin').title);
   $('sound').innerHTML = icon(soundOn ? 'soundOn' : 'soundOff');
   $('sound').title = `Turn sounds ${soundOn ? 'off' : 'on'}. Right-click to choose the click.`; $('sound').setAttribute('aria-label', $('sound').title); $('sound').setAttribute('aria-pressed', soundOn);
   const themes = [['auto', 'System'], ['light', 'Light'], ['dark', 'Dark']], theme = themes.findIndex(t => t[0] === getTheme());
@@ -469,7 +502,7 @@ function renderFrame() {
   const r = ROUTES[route];
   $('title').textContent = r.title;
   $('subtitle').textContent = L && LIBRARY.includes(route) ? plural(L[route].length, route.slice(0, -1), route) : '';
-  if (L && route === 'grouping' && board.edits.size) $('subtitle').textContent = `${plural(board.edits.size, 'change', 'changes')} not written`;
+  if (L && route === 'grouping' && board.edits.size) $('subtitle').textContent = 'Not written yet';  // the count is on Review
   if (L && route === 'duplicates') { const going = dupGoing(), size = going.reduce((t, id) => t + songById(id).size, 0); $('subtitle').textContent = going.length ? `${plural(going.length, 'copy', 'copies')} to remove · ${bytes(size)} back` : plural(L.duplicates.sets.filter(x => !keptBoth().has(x.key)).length, 'song with copies', 'songs with copies'); }
   if (demo) $('subtitle').textContent = 'Demo · nothing is sent, written or deleted';
   const gone = L && offline() && !demo;
@@ -506,8 +539,9 @@ function renderFrame() {
     : route === 'backups' ? `<button class="btn" data-bk="open">Show in Finder</button><button class="btn" data-bk="copy" ${shut || picking ? 'disabled' : ''}>${picking ? '<span class="spin"></span>Choose a folder…' : 'Copy songs to this Mac…'}</button><button class="btn prominent" data-bk="create" ${shut ? 'disabled' : ''}>Back up now</button>`
     : route === 'metadata' ? metaButtons(shut) : route === 'health' ? healthButtons(shut) : '';
   const edits = board.edits.size;
-  const boardButtons = route === 'grouping' && L ? `<div class="segmented tools"><button data-board-undo aria-label="Undo" data-tip="Undo" ${board.past.length ? '' : 'disabled'}>${icon('undo')}</button><button data-board-redo aria-label="Redo" data-tip="Redo" ${board.future.length ? '' : 'disabled'}>${icon('redo')}</button></div>
-    ${edits ? '<button class="btn" data-board-reset>Forget…</button>' : ''}<button class="btn" data-board-new>New album</button><button class="btn prominent" data-board-review ${shut || !edits ? 'disabled' : ''}>${edits ? `Review ${plural(edits, 'change', 'changes')}…` : 'Review…'}</button>` : '';
+  // undo and the draft's buttons are there once there is something to undo, forget or write
+  const boardButtons = route === 'grouping' && L ? `${board.past.length || board.future.length ? `<div class="segmented tools"><button data-board-undo aria-label="Undo" data-tip="Undo ⌘Z" ${board.past.length ? '' : 'disabled'}>${icon('undo')}</button><button data-board-redo aria-label="Redo" data-tip="Redo ⇧⌘Z" ${board.future.length ? '' : 'disabled'}>${icon('redo')}</button></div>` : ''}
+    ${edits ? '<button class="btn" data-board-reset>Forget…</button>' : ''}<button class="btn" data-board-new>New album</button>${edits ? `<button class="btn prominent" data-board-review ${shut ? 'disabled' : ''}>Review ${plural(edits, 'change', 'changes')}…</button>` : ''}` : '';
   const going = route === 'duplicates' && L ? dupGoing().length : 0, canSuggest = route === 'duplicates' && L && dupTab !== 'kept' && dupSets(dupTab).some(x => dupChoice.get(x.key) !== x.keep);
   const dupButtons = route === 'duplicates' && L?.duplicates.sets.length ? `${dupChoice.size ? '<button class="btn plain" data-dup-clear>Clear</button>' : ''}${canSuggest ? '<button class="btn" data-dup-suggest>Use suggestions</button>' : ''}<button class="btn prominent" data-dup-remove ${shut || !going ? 'disabled' : ''}>${going ? `Remove ${plural(going, 'copy', 'copies')}…` : 'Remove…'}</button>` : '';
   $('toolActions').innerHTML = (demo ? '<button class="btn" id="demoToggle">Leave Demo</button>' : '') + pickButtons + lookUp + sortBtn + viewSwitch + writeButtons + boardButtons + dupButtons + pageButtons;
@@ -583,13 +617,16 @@ function render() {
     $('main').replaceChildren(kept);
     if (kept.table) table = kept.table;
     if (kept.flowItems) { flowItems = kept.flowItems; flowIdx = Math.min(flowIdx ?? flowItems.length >> 1, flowItems.length - 1); kept.querySelector('.fi.flipped')?.classList.remove('flipped'); }
-  } else $('main').innerHTML = !state.library ? viewEmpty() : ({ albums: viewLibrary, artists: viewLibrary, songs: viewLibrary, add: viewAdd, grouping: viewGrouping, duplicates: viewDuplicates, covers: viewCovers, metadata: viewMeta, backups: viewBackups, health: viewHealth }[route])();
+  } else {
+    if (comboFor && $('main').contains(comboFor)) comboClose();  // its field is about to be drawn again
+    $('main').innerHTML = !state.library ? viewEmpty() : ({ albums: viewLibrary, artists: viewLibrary, songs: viewLibrary, add: viewAdd, grouping: viewGrouping, duplicates: viewDuplicates, covers: viewCovers, metadata: viewMeta, backups: viewBackups, health: viewHealth }[route])();
+  }
   keepScreen();
   markPlaying();
   if (picked.size) markPicks();
   syncFlowMode();
   document.querySelector('.content').classList.toggle('boardmode', route === 'grouping' && !!state.library);
-  if (route === 'grouping' && state.library) drawShelf();
+  if (route === 'grouping' && state.library) { drawShelf(); sizeBoxes(); }
   drawRows();
   railBuild();
   if (curView() === 'flow' && state.library && $('flow')) { flowLayout(); requestAnimationFrame(() => requestAnimationFrame(() => $('flow')?.classList.remove('still'))); }
@@ -638,6 +675,25 @@ document.addEventListener('change', async e => {
   try { const r = await api('/api/settings', { developer, confirm: true }); state.developer = r.developer; state.writing = r.writing; } catch (err) {}
   renderFrame(); render();
 });
+/* Write mode and Read mode. Read mode is a choice kept on this Mac: no write starts, whatever the iPod would take. Write mode asks first, and for an iPod
+   that isn't confirmed it is the same choice as Health's: writing allowed though it isn't on the list. */
+async function setMode(changes) {
+  if (demo) { Object.assign(state, changes); return render(); }
+  try { const r = await api('/api/settings', { ...changes, confirm: true }); state.developer = r.developer; state.readMode = r.readMode; state.writing = r.writing; } catch (err) {}
+  renderFrame(); render();
+}
+$('modeMark').onclick = async () => {
+  if (locked()) return;
+  if (!('readMode' in state) && !demo) return go('health');  // a server from before Read mode: restarting it brings the switch
+  const device = state.writing?.allowed !== false, writes = device && !state.readMode;
+  if (writes) { await setMode({ readMode: true }); return toast('Read mode. Nothing is written to the iPod until you switch back.'); }
+  if (!device && state.developer) return go('health');  // blocked for a reason no setting lifts: Health says what it is
+  const unconfirmed = !device;
+  if (!await ask({ title: 'Switch to Write mode?', ok: 'Switch to Write mode', destructive: unconfirmed,
+    message: unconfirmed ? `This iPod isn’t on the confirmed list${state.writing?.why ? ` (${state.writing.why})` : ''}, so nobody has proved it reads what is written here. A backup is still saved before every write and the signature and identity checks stay on, but a bad write could leave the iPod needing a restore.`
+      : 'What you do here can then change the iPod: songs, names, albums and covers. A backup is saved before every write, and Backups can put it back. Quit Music first.' })) return;
+  await setMode({ readMode: false, ...(unconfirmed ? { developer: true } : {}) });
+};
 function viewHealth() { return writeSetting() + healthBody(); }
 function healthBody() {
   const busy = locked();
@@ -675,12 +731,13 @@ async function fixSort(h) {
 /* The notices the GPL asks an interactive program to show (section 5d). PROJECT_URL is where someone gets the source. */
 const PROJECT_URL = 'https://github.com/benkiguna/repod';
 function showAbout() {
-  return ask({ title: 'RePod', ok: 'Done', cancel: null, wide: true, message: '', html: `<div class="about">
+  return ask({ title: '', ok: 'Done', cancel: null, wide: true, message: '', html: `<div class="about">
+    <svg class="wordmark" role="img" aria-label="RePod"><use href="#wordmark"/></svg>
     <p>Copyright © 2026 Jakub Warzecha. Modified in 2026 by the RePod authors.</p>
     <p>Free software: you can redistribute it and change it under the terms of the <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU General Public License, version 3</a>. It comes with <b>absolutely no warranty</b>.${PROJECT_URL ? ` The source is at <a href="${esc(PROJECT_URL)}" target="_blank" rel="noopener">${esc(PROJECT_URL)}</a>.` : ''}</p>
     <p>iPod, iTunes and Mac are trademarks of Apple Inc. This product is not supported, written or published by Apple.</p></div>` });
 }
-$('about').onclick = showAbout;
+$('about').onclick = $('brand').onclick = showAbout;
 function viewEmpty() {
   if (reading || state.reading) return `<div class="empty"><div class="empty-logo">${logo()}</div><h2>Reading the iPod…</h2>A large library takes a moment. Nothing on the iPod changes.</div>`;
   const why = state.loadError ? `<p class="error">${esc(state.loadError)}</p>` : '';
@@ -722,7 +779,7 @@ const sortLetter = () => { const { by, dir } = sortOf(), [, value, number] = SOR
 const stripName = () => sortLetter() || SORTS[route].name[1];  // the A-Z strip follows the sort when it is by letters, else it finds names
 function setSort(by) {
   const now = sortOf(); sortState[route] = { by, dir: now.by === by ? -now.dir : 1 };
-  try { localStorage.setItem('sort', JSON.stringify(sortState)); } catch (e) {}
+  try { localStorage.setItem('sort', JSON.stringify(sortState)); } catch (e) {} prefChanged();
   flowIdx = null; render(); scroller().scrollTop = 0; drawRows();
 }
 const PICK_ALL = '<input type="checkbox" data-pick-all aria-label="Select all shown">';
@@ -812,8 +869,38 @@ function listHtml() {
   return `<div class="group"><table class="lib ${route}"><thead><tr>${head.map(h => { if (h === PICK_ALL) return `<th class="pick">${h}</th>`;
     const by = Object.keys(SORTS[route]).find(k => SORTS[route][k][0] === h || (h === 'Album' && route === 'albums' && k === 'name') || (h === 'Artist' && route === 'artists' && k === 'name')), now = sortOf();
     const label = by ? `<button class="th-sort" data-sort="${by}" aria-label="Sort by ${h}">${h}${now.by === by ? `<span>${now.dir < 0 ? '↑' : '↓'}</span>` : ''}</button>` : h;
-    return `<th class="${numeric.includes(h) ? 'num' : h ? '' : 'row-act'}"${now.by === by ? ` aria-sort="${now.dir < 0 ? 'descending' : 'ascending'}"` : ''}>${label}</th>`; }).join('')}</tr></thead><tbody id="rows">${tableBody(items, row, keyOf, letter)}</tbody></table></div>`;
+    const mine = colWidths[route], width = !mine ? '' : h === head[1] ? 'auto' : mine[h] || '';  // the name column takes what the others leave
+    const col = h ? ` data-col="${esc(h)}"${width ? ` style="width:${width}"` : ''}` : '';
+    return `<th class="${numeric.includes(h) ? 'num' : h ? '' : 'row-act'}"${col}${now.by === by ? ` aria-sort="${now.dir < 0 ? 'descending' : 'ascending'}"` : ''}>${label}${h ? '<span class="col-grip" title="Drag to resize. Double-click for the standard widths." aria-hidden="true"></span>' : ''}</th>`; }).join('')}</tr></thead><tbody id="rows">${tableBody(items, row, keyOf, letter)}</tbody></table></div>`;
 }
+/* Column widths: drag the line between two headings and the width moves from one column to the other, so the list still fits the page; double-click it
+   for the standard widths. Kept for each list: text columns as shares of its width, so they follow the window, number columns as they are. The name
+   column takes up the rest, so a column the window is too narrow for can go without the others losing their sizes. */
+let colWidths = {};
+try { colWidths = JSON.parse(localStorage.getItem('colWidths')) || {}; } catch (e) {}
+const saveCols = () => { try { localStorage.setItem('colWidths', JSON.stringify(colWidths)); } catch (e) {} prefChanged(); };
+document.addEventListener('pointerdown', e => {
+  const grip = e.target.closest('.col-grip'); if (!grip || e.button) return;
+  const th = grip.parentElement, table = th.closest('table'), cols = [...table.tHead.rows[0].cells].filter(c => c.dataset.col && c.getClientRects().length);
+  const next = cols[cols.indexOf(th) + 1]; if (!next) return;  // the last column gives way to nothing
+  e.preventDefault(); e.stopPropagation();
+  const W = table.offsetWidth, MIN = 48, x0 = e.clientX, a0 = th.offsetWidth, b0 = next.offsetWidth;
+  cols.forEach(c => { c.style.width = `${c.offsetWidth}px`; });
+  document.body.classList.add('col-resizing'); grip.classList.add('on');
+  const move = ev => { const d = Math.max(MIN - a0, Math.min(b0 - MIN, ev.clientX - x0)); th.style.width = `${a0 + d}px`; next.style.width = `${b0 - d}px`; };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    document.body.classList.remove('col-resizing'); grip.classList.remove('on');
+    // a number column keeps its size; a text column keeps its share of the width
+    colWidths[route] = { ...colWidths[route], ...Object.fromEntries(cols.map(c => [c.dataset.col, c.classList.contains('num') ? `${c.offsetWidth}px` : `${(c.offsetWidth / W * 100).toFixed(2)}%`])) };
+    cols.forEach(c => { c.style.width = c === cols[0] ? 'auto' : colWidths[route][c.dataset.col]; }); saveCols();
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+});
+document.addEventListener('dblclick', e => {
+  const grip = e.target.closest('.col-grip'); if (!grip) return;
+  delete colWidths[route]; saveCols(); grip.closest('tr').querySelectorAll('th[data-col]').forEach(c => { c.style.width = ''; });
+});
 
 /* -------------------------------------------------------------- add songs */
 /* Adding, with MusicBrainz first if asked: the songs are looked up while they are still in their folder, you choose what to use, and then they go in with those names. */
@@ -925,6 +1012,7 @@ function comboMove(step) {
 }
 function comboPick(name) {
   const input = comboFor; comboClose();
+  if (!input?.isConnected) return;  // its field was drawn again under it: nothing to fill in
   input.value = name; comboQuiet = true;
   input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
   comboQuiet = false;
@@ -932,6 +1020,9 @@ function comboPick(name) {
 document.addEventListener('input', ev => { if (ev.target.dataset?.list && !comboQuiet) comboShow(ev.target); });
 document.addEventListener('click', ev => { if (ev.target.dataset?.list) comboShow(ev.target); });
 document.addEventListener('focusout', ev => { if (ev.target === comboFor) comboClose(); });
+// A field taken away by a redraw sends no focusout, so a click anywhere else, or Escape from anywhere, closes the list too.
+document.addEventListener('pointerdown', ev => { if (comboOpen() && !comboBox.contains(ev.target) && ev.target !== comboFor) comboClose(); }, true);
+addEventListener('keydown', ev => { if (ev.key === 'Escape' && comboOpen() && !comboFor?.isConnected) { ev.preventDefault(); comboClose(); } }, true);
 document.addEventListener('keydown', ev => {
   if (!ev.target.dataset?.list) return;
   const open = comboOpen() && comboFor === ev.target, hold = () => { ev.preventDefault(); ev.stopPropagation(); };
@@ -949,9 +1040,11 @@ addEventListener('scroll', ev => { if (comboFor && !comboBox.contains(ev.target)
 /* Every album is a list you can change by hand. Nothing here touches the iPod: what you do is a draft, the fields that differ for each song (`board.edits`), and all
    of the board is worked out from the songs as they would be, so what it shows is what the iPod will file. Review writes the draft in one `retag`. */
 const LOOSE = '\uE000', KEY_GAP = '\uE001';  // private-use letters: no name holds them, and unlike a NUL they survive an HTML attribute
-const board = { edits: new Map(), open: [], past: [], future: [], shelf: 'fix', picked: new Set(), lastPick: null, ver: 0 };
-try { const saved = JSON.parse(localStorage.getItem('groupBoard')); if (saved) { board.edits = new Map(saved.edits); board.open = saved.open; } } catch (e) {}
-function saveBoard() { board.ver++; try { localStorage.setItem('groupBoard', JSON.stringify({ edits: [...board.edits], open: board.open })); } catch (e) {} }
+const board = { edits: new Map(), open: [], fresh: null, past: [], future: [], shelf: 'fix', picked: new Set(), lastPick: null, ver: 0 };
+try { const saved = JSON.parse(localStorage.getItem('groupBoard')); if (saved) { board.edits = new Map(saved.edits); board.open = saved.open; board.fresh = saved.fresh ?? null; } } catch (e) {}
+/* Two albums open at a time, and a third when it is the one New album made: opening another puts away the one opened longest ago. */
+const capOpen = keys => { const kept = new Set([...keys.filter(k => k !== board.fresh).slice(-2), board.fresh]); return keys.filter(k => kept.has(k)); };
+function saveBoard() { board.ver++; board.open = capOpen(board.open); try { localStorage.setItem('groupBoard', JSON.stringify({ edits: [...board.edits], open: board.open, fresh: board.fresh })); } catch (e) {} }
 const boxKey = (album, artist) => album ? artist + KEY_GAP + album : LOOSE;
 const boxName = key => { if (key === LOOSE) return { album: '', artist: '' }; const [artist, ...album] = key.split(KEY_GAP); return { artist, album: album.join(KEY_GAP) }; };
 const inBox = (a, b) => (a.disc || 1) - (b.disc || 1) || (a.track || 1e6) - (b.track || 1e6) || a.title.localeCompare(b.title);
@@ -995,7 +1088,7 @@ function stepBoard(from, to) {
   const last = from.pop(); if (!last) return;
   to.push({ edits: new Map(board.edits), open: [...board.open] }); board.edits = last.edits; board.open = last.open; saveBoard(); drawBoard();
 }
-const renameOpen = (from, to) => { board.open = [...new Set(board.open.map(k => k === from ? to : k))]; };
+const renameOpen = (from, to) => { board.open = [...new Set(board.open.map(k => k === from ? to : k))]; if (board.fresh === from) board.fresh = to; };
 function likelyOwner(songs) {
   const counts = new Map(); for (const s of songs) { const name = s.artist || s.albumArtist; if (name) counts.set(name, (counts.get(name) || 0) + 1); }
   const top = [...counts].sort((a, b) => b[1] - a[1])[0];
@@ -1033,18 +1126,19 @@ function joinBoxes(from, to) {  // a whole album onto another: each keeps its nu
 function freshName() { const taken = new Set([...boardWorld().boxes.keys(), ...board.open].map(k => boxName(k).album)); let n = 1, name = 'New album'; while (taken.has(name)) name = `New album ${++n}`; return name; }
 function newBox(ids) {
   let key = boxKey(freshName(), '');
-  change(() => { if (ids?.length) key = moveSongs(ids, key, null); board.open = [...board.open.filter(k => k !== key), key]; board.picked.clear(); });
+  change(() => { if (ids?.length) key = moveSongs(ids, key, null); board.fresh = key; board.open = [...board.open.filter(k => k !== key), key]; board.picked.clear(); });
   const box = document.querySelector(`[data-box="${CSS.escape(key)}"]`);
   box?.scrollIntoView({ inline: 'end', block: 'nearest' }); box?.querySelector('.box-name')?.select();
 }
 function openBoxes(keys, alone) {
-  board.open = alone ? [...new Set(keys)] : [...new Set([...board.open, ...keys])];
+  board.open = alone ? [...new Set(keys)] : [...board.open.filter(k => !keys.includes(k)), ...new Set(keys)];  // what was just opened is the last to be put away
   saveBoard(); drawBoard();
   document.querySelector(`[data-box="${CSS.escape(keys[keys.length - 1] ?? '')}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
 function sendToBoard(songs) {  // from a selection in Songs or Albums
   board.picked = new Set(songs.map(s => s.id));
-  board.open = [...new Set([...board.open, ...songs.map(s => { const x = live(s.id); return boxKey(x.album, x.albumArtist); })])];
+  const keys = [...new Set(songs.map(s => { const x = live(s.id); return boxKey(x.album, x.albumArtist); }))];
+  board.open = [...board.open.filter(k => !keys.includes(k)), ...keys];
   picked.clear(); saveBoard(); go('grouping');
 }
 const hintBoxes = h => [...new Set(h.ids.map(id => { const x = live(id); return x ? boxKey(x.album, x.albumArtist) : null; }).filter(Boolean))];
@@ -1161,23 +1255,31 @@ function fixTab() {
 function boardHtml() {
   const L = state.library, w = boardWorld(), hints = L.hints.filter(h => !hintDone(h)).length + (L.outOfPlace.length ? 1 : 0), singles = [...w.boxes].filter(([k, v]) => k !== LOOSE && v.length === 1).length;
   const tabs = [['fix', 'To fix', hints], ['albums', 'Albums', w.boxes.size - (w.boxes.has(LOOSE) ? 1 : 0)], ['singles', 'Singles', singles], ['songs', 'Songs', L.songs.length]];
-  const shelf = `<aside class="shelf"><div class="segmented" role="group" aria-label="Show">${tabs.map(([k, l, n]) => `<button data-shelf-tab="${k}" aria-pressed="${board.shelf === k}" title="${l}: ${n.toLocaleString()}">${l}</button>`).join('')}</div>
+  const shelf = `<aside class="shelf"><div class="segmented" role="group" aria-label="Show">${tabs.map(([k, l, n]) => `<button data-shelf-tab="${k}" aria-pressed="${board.shelf === k}" title="${l}: ${n.toLocaleString()}">${l}${k === 'fix' && n ? `<span class="n">${n}</span>` : ''}</button>`).join('')}</div>
     ${board.shelf === 'fix' && !query ? `<div class="sh-scroll">${fixTab()}</div>` : `<div class="sh-scroll" id="shelfRows"></div>`}</aside>`;
   const open = board.open.filter(k => w.boxes.has(k) || k !== LOOSE);
   return `<datalist id="dlPeople">${suggest().people.map(x => `<option value="${esc(x)}">`).join('')}</datalist><datalist id="dlAlbums">${uniqueOf(s => s.album).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
-    <div class="board" id="board">${shelf}<div class="stage" id="boxes">${open.map(boxHtml).join('') || '<div class="empty"><h2>No album open</h2>Pick one from the list, then drag songs between albums.</div>'}
+    <div class="board" id="board">${shelf}<div class="stage" id="boxes">${open.map(boxHtml).join('') || `<div class="stage-empty">${icon('stack')}<h2>No album open</h2><p>Open a fix or an album from the list, then drag songs between albums. Nothing is written until you review it.</p></div>`}
       <div class="box-new">${icon('add')}New album</div></div></div>`;
 }
 const viewGrouping = () => boardHtml();
+/* The albums are as wide as lets a whole number of them fill the row, so a row that scrolls rests on an album's edge, never on a sliver of one. */
+function sizeBoxes() {
+  const st = $('boxes'); if (!st) return;
+  const gap = 12, w = st.clientWidth, n = Math.max(1, Math.floor((w + gap) / (280 + gap))), width = `${(w - (n - 1) * gap) / n}px`;
+  if (st.style.getPropertyValue('--box-w') !== width) st.style.setProperty('--box-w', width);
+}
+new ResizeObserver(() => requestAnimationFrame(sizeBoxes)).observe($('main'));
 function drawBoard() {
   if (route !== 'grouping' || !$('board')) return;
   const focus = document.activeElement?.closest?.('[data-id]')?.dataset.id, boxes = $('boxes'), left = boxes.scrollLeft, shelfTop = $('shelfRows')?.scrollTop ?? document.querySelector('.sh-scroll')?.scrollTop ?? 0;
   const tops = new Map([...document.querySelectorAll('.box')].map(b => [b.dataset.box, b.querySelector('.box-songs').scrollTop]));
+  comboClose();  // its field is about to be drawn again
   $('main').innerHTML = boardHtml();
   $('boxes').scrollLeft = left;
   for (const b of document.querySelectorAll('.box')) b.querySelector('.box-songs').scrollTop = tops.get(b.dataset.box) ?? 0;
   const sc = $('shelfRows') ?? document.querySelector('.sh-scroll'); if (sc) sc.scrollTop = shelfTop;
-  drawShelf(); renderFrame();
+  drawShelf(); sizeBoxes(); renderFrame();
   if (focus) document.querySelector(`.box [data-id="${focus}"]`)?.focus({ preventScroll: true });
 }
 function pickSong(id, ev) {
@@ -1596,14 +1698,27 @@ function flowView(items) {
     <div class="flow-cap" id="flowCap"></div>
     <div class="index h" id="flowIdx" aria-label="Jump to letter">${indexHtml(items.map(it => it.k))}</div>`;
 }
-/* Chrome and Safari take a sideways swipe the page has not used for Back or Forward. In Cover Flow a swipe is always the covers', wherever the pointer is:
-   the overscroll rule stops Chrome, and this stops Safari. It only listens in Cover Flow: a wheel listener that can cancel slows every other list's scrolling. */
-const holdSwipe = ev => { if (ev.cancelable && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) && !ev.target.closest?.('dialog')) ev.preventDefault(); };
+/* Browsers take a sideways swipe that nothing on the page scrolls for Back or Forward, which here leaves the app. A swipe never navigates:
+   the overscroll rule in style.css stops Chrome and Firefox. Safari takes no notice of it, so there a wheel listener cancels a sideways swipe
+   that nothing under the pointer can scroll that way; in Cover Flow every sideways part is the covers', as Safari decides on a gesture's first
+   event, which can be mostly downward. A mostly downward scroll elsewhere is never cancelled. Only Safari gets the listener: one that can
+   cancel makes the browser wait on the page before it scrolls anything. */
+const SAFARI = /^((?!chrome|chromium|crios|fxios|edg|android).)*safari/i.test(navigator.userAgent);
+function scrollsX(el, dx) {  // whether something from el up can still scroll that way
+  for (; el && el !== document.documentElement; el = el.parentElement) {
+    const o = getComputedStyle(el).overflowX;
+    if ((o === 'auto' || o === 'scroll') && el.scrollWidth > el.clientWidth + 1 && (dx < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1)) return true;
+  }
+  return false;
+}
+const holdSwipe = ev => {
+  if (!ev.cancelable || !ev.deltaX) return;
+  if (flowOn() || (Math.abs(ev.deltaX) > Math.abs(ev.deltaY) && !scrollsX(ev.target, ev.deltaX))) ev.preventDefault();
+};
+if (SAFARI) addEventListener('wheel', holdSwipe, { passive: false });
 function syncFlowMode() {
   const m = document.querySelector('.content'), on = curView() === 'flow' && !!$('flow');
   if (m) m.classList.toggle('flowmode', on);
-  document.documentElement.classList.toggle('no-swipe', on);
-  (on ? addEventListener : removeEventListener)('wheel', holdSwipe, { passive: false });
 }
 /* Cover Flow physics. Position is a float, in covers: the wheel adds spin, friction slows it like a flywheel, and when it is slow enough it
    settles onto the nearest cover with a spring. Speed is capped. Every cover tilts and slides by its distance from the position, so a wave of
@@ -1874,12 +1989,13 @@ function reopen(change) {  // change() switches the route or the view; the new o
   remember(); change(); flowIdx = flowMem[memKey()] ?? null; render(); scroller().scrollTop = scrollMem[memKey()] ?? 0; drawRows();
 }
 function go(r) {
-  if (LIBRARY.includes(r)) { wheelCursor = r; wheelLevel = 'view'; }
+  if (LIBRARY.includes(r)) { wheelCursor = lastLibrary = r; wheelLevel = 'view'; } else { wheelCursor = null; wheelLevel = 'menu'; }
   reopen(() => { searches[route] = query; route = r; location.hash = r; query = searches[r] ?? ''; $('q').value = query; picked.clear(); lastPick = null; });
 }
 function wheelStep(n) {
   if (!state.library) return;
   if (wheelLevel === 'menu' || !LIBRARY.includes(route)) {
+    if (!wheelCursor) { wheelCursor = lastLibrary; play('tick'); return renderFrame(); }  // the first turn brings the highlight back where it was
     const next = LIBRARY[clamp(LIBRARY.indexOf(wheelCursor) + n, 0, LIBRARY.length - 1)];
     if (next !== wheelCursor) { wheelCursor = next; play('tick'); renderFrame(); }
   } else if (flowOn()) flowStep(n);
@@ -1892,6 +2008,7 @@ function wheelPress(what) {
     const open = document.querySelector('.fi.flipped');
     if (open) open.classList.remove('flipped'); else { wheelLevel = 'menu'; renderFrame(); }
   } else if (what === 'select') {
+    if (!wheelCursor) { play('click'); wheelCursor = lastLibrary; return renderFrame(); }
     if (wheelLevel === 'menu' || route !== wheelCursor) { play('click'); if (route !== wheelCursor) go(wheelCursor); else { wheelLevel = 'view'; renderFrame(); } }
     else if (flowOn()) document.querySelector('.fi.c .art')?.click();  // the same as clicking the centre cover, its sound included
   } else {
@@ -1910,28 +2027,49 @@ function wheelPress(what) {
   const bays = ['left', 'right'].map(side => { const el = document.createElement('div'); el.className = `bay ${side}`; el.setAttribute('aria-hidden', 'true'); app.appendChild(el); return { side, el }; });
   const sideOf = p => (p === ipod) === app.classList.contains('swapped') ? 'right' : 'left';
   const size = p => [p.el.offsetWidth, p.el.offsetHeight];
-  function home(p, side = sideOf(p)) { const [w, h] = size(p); return { x: side === 'left' ? EDGE : innerWidth - EDGE - w, y: (innerHeight - h) / 2, w, h }; }
-  function put(p, x, y) { p.x = x; p.y = y; const b = home(p); p.el.style.translate = `${x - b.x}px ${y - b.y}px`; }
-  function link(on) { linked = on; rail.el.classList.toggle('slim', on); }
-  function keep() { tidyButton(); try { localStorage.setItem('panels', JSON.stringify({ swapped: app.classList.contains('swapped'), linked, gap: rail.gap, loose: all.map(p => p.free ? [p.x / Math.max(1, innerWidth - size(p)[0]), p.y / Math.max(1, innerHeight - size(p)[1])] : null) })); } catch (e) {} }
-  function tidyButton() {  // the rail is a row taller with it, so everything is measured again
-    $('tidy').hidden = !all.some(p => p.free);
-    all.forEach(p => { if (p.free) put(p, ...within(p, p.x, p.y)); else { const b = home(p); p.x = b.x; p.y = b.y; } }); follow(); paired();
+  function base(p, side = sideOf(p)) { const [w, h] = size(p); return { x: side === 'left' ? EDGE : innerWidth - EDGE - w, y: (innerHeight - h) / 2, w, h }; }  // where the layout puts it
+  const outside = side => linked && (side === 'left' ? rail.gap < 0 : rail.gap > 0);  // the locked rail is between the iPod and the window's edge
+  function home(p, side = sideOf(p)) {  // where it rests: the iPod steps in to make room for a rail locked on its outer side
+    const b = base(p, side); if (p === ipod && outside(side)) b.x += (side === 'left' ? 1 : -1) * (rail.el.offsetWidth + GAP); return b;
   }
+  function put(p, x, y) { p.x = x; p.y = y; const b = base(p); p.el.style.translate = `${x - b.x}px ${y - b.y}px`; }
+  const atHome = p => { const b = home(p); put(p, b.x, b.y); };
+  function link(on) { linked = on; rail.el.classList.toggle('slim', on); }
+  function keep() { tidyButton(); prefChanged(); try { localStorage.setItem('panels', JSON.stringify({ swapped: app.classList.contains('swapped'), linked, gap: rail.gap, loose: all.map(p => p.free ? [p.x / Math.max(1, innerWidth - size(p)[0]), p.y / Math.max(1, innerHeight - size(p)[1])] : null) })); } catch (e) {} }
+  function tidyButton() {  // the rail is a row taller with it, so everything is measured again
+    $('tidy').hidden = pinned || !all.some(p => p.free);
+    all.forEach(p => { if (p.free) put(p, ...within(p, p.x, p.y)); else atHome(p); }); follow(); paired(); fit();
+  }
+  /* The page takes the width the panels leave. A panel (or a locked pair) near a window edge keeps a column there; one loose in the middle floats over the page.
+     Where they will rest, not where they are mid-slide, so the page moves once. The phone layout keeps its own. */
+  const NEAR = 120, ROOM = 48, BRAND = 147;  // ROOM: the margin with the A-Z strip in it; BRAND: the title starts clear of the wordmark
+  function fit() {
+    const content = document.querySelector('.content');
+    if (innerWidth <= 760) { content.style.removeProperty('--edge-l'); content.style.removeProperty('--edge-r'); return; }
+    const used = { l: 0, r: 0 };
+    for (const group of linked ? [[ipod, rail]] : [[ipod], [rail]]) {
+      const l = Math.min(...group.map(p => p.x)), r = Math.max(...group.map(p => p.x + p.el.offsetWidth)), right = innerWidth - r;
+      if (Math.min(l, right) > NEAR) continue;
+      if (l <= right) used.l = Math.max(used.l, r); else used.r = Math.max(used.r, innerWidth - l);
+    }
+    content.style.setProperty('--edge-l', `${Math.max(used.l ? used.l + ROOM : 0, BRAND)}px`);
+    content.style.setProperty('--edge-r', `${used.r ? used.r + ROOM : ROOM}px`);
+  }
+  relayout = tidyButton;
   const paired = () => app.classList.toggle('paired', linked && !ipod.free);  // the pair stands in the iPod's column; the A-Z strip gives way to it
   function land(p) {  // from wherever it is to its place in the layout, with a slide
-    const b = home(p), x = p.x ?? b.x, y = p.y ?? b.y;
-    p.el.style.transition = 'none'; p.el.style.translate = `${x - b.x}px ${y - b.y}px`; p.el.getBoundingClientRect();
-    p.el.style.transition = ''; p.el.style.translate = ''; p.x = b.x; p.y = b.y; p.free = false;
+    const b = home(p);
+    p.el.style.transition = 'none'; put(p, p.x ?? b.x, p.y ?? b.y); p.el.getBoundingClientRect();
+    p.el.style.transition = ''; put(p, b.x, b.y); p.free = false;
   }
   function still(p) { p.el.style.transition = 'none'; put(p, p.x, p.y); p.el.getBoundingClientRect(); p.el.style.transition = ''; }  // its place in the layout has moved, the panel has not
-  function dock(side) {  // the pair in the iPod's column, the slim rail on the inside: it fits in the margin beside the content
+  function dock(side, gap = side === 'left' ? 1 : -1) {  // the pair in the iPod's column, the slim rail on the inside unless it was locked on the outside
     if (side !== sideOf(ipod)) app.classList.toggle('swapped');
-    link(true); rail.gap = side === 'left' ? 1 : -1; rail.free = true;
+    link(true); rail.gap = gap; rail.free = true;
     land(ipod); still(rail); follow(); keep();
   }
   function park(p, side) {  // into a bay; the other panel takes the other one if it was parked here
-    if (linked) return dock(side);
+    if (linked) return dock(side, rail.gap);  // a pair keeps its order
     const other = p === ipod ? rail : ipod, wasFree = other.free;
     if (side !== sideOf(p)) { app.classList.toggle('swapped'); if (wasFree) still(other); }
     land(p); if (!wasFree) land(other); keep();
@@ -1952,7 +2090,15 @@ function wheelPress(what) {
     const r = reach(p), to = gap === right ? other.x + ow + GAP : other.x - w - GAP;
     return to < r.l || to > r.r ? null : { gap, x: to, y: between(other.y + (oh - h) / 2, r.t, r.b) };
   }
+  function outer(p, other, x, y) {  // the rail over the outer part of the parked iPod: it locks between the iPod and the window's edge
+    if (p !== rail || other.free || linked) return null;
+    const [w, h] = size(p), [ow, oh] = size(other), side = sideOf(other), mid = x + w / 2;
+    if (Math.abs(y + h / 2 - other.y - oh / 2) > (h + oh) / 2 || (side === 'left' ? mid > other.x + ow * .3 : mid < other.x + ow * .7)) return null;
+    const r = reach(p), to = { x: side === 'left' ? r.l : r.r, y: between(other.y + (oh - h) / 2, r.t, r.b) };
+    return { ...to, to, outer: true };
+  }
   function magnets(p, other, x, y, moving) {  // returns where the magnets take a panel the pointer has put at x, y
+    const o = outer(p, other, x, y); if (o) { bays.forEach(b => b.el.classList.remove('near')); return o; }
     const face = faceTo(p, other, x, y), beside = face && face.gap > -MAGNET.lock && face.gap < MAGNET.pull;
     let near = null, best = MAGNET.bayPull;
     if (moving) for (const b of bays) { if (beside && !other.free && sideOf(other) === b.side) continue;  // next to a parked panel, not taking its place
@@ -1973,7 +2119,7 @@ function wheelPress(what) {
       if (at.bay) return park(p, at.bay);
       p.free = true;
       if (at.to) {
-        if (!other.free) return dock(sideOf(other));  // locked to a parked panel: the pair docks on that side
+        if (!other.free) return dock(sideOf(other), at.outer ? (sideOf(other) === 'left' ? -1 : 1) : undefined);  // locked to a parked panel: the pair docks on that side
         link(true); rail.free = ipod.free = true; rail.gap = rail.x > ipod.x ? 1 : -1; follow();
       }
       keep();
@@ -1995,13 +2141,13 @@ function wheelPress(what) {
     requestAnimationFrame(step);
   }
   function grab(p, ev, startMoved) {
-    if (innerWidth <= 760) return;
+    if (innerWidth <= 760 || pinned) return;
     const other = p === ipod ? rail : ipod, x0 = ev.clientX, y0 = ev.clientY, ox = p.x, oy = p.y;
     let moved = startMoved, at = { x: p.x, y: p.y }, vx = 0, vy = 0, lastX = x0, lastY = y0, lastT = ev.timeStamp, freed = !linked || p === ipod, follows = linked && p === ipod;
     const begin = () => {
       moved = true; if (freed) p.free = true; paired(); hold(true); lift(true);
       const [w, h] = size(p), extra = follows ? rail.el.offsetWidth + GAP : 0;  // a pair's bay holds both
-      bays.forEach(b => { const t = home(p, b.side); b.el.style.cssText = `left:${t.x - (b.side === 'right' ? extra : 0)}px;top:${t.y}px;width:${w + extra}px;height:${h}px`; b.el.classList.add('show'); });
+      bays.forEach(b => { const t = home(p, b.side); b.el.style.cssText = `left:${t.x - (follows && rail.gap < 0 ? extra : 0)}px;top:${t.y}px;width:${w + extra}px;height:${h}px`; b.el.classList.add('show'); });
     };
     const move = e => {
       const dx = e.clientX - x0, dy = e.clientY - y0;
@@ -2026,23 +2172,24 @@ function wheelPress(what) {
     addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   }
   ipod.el.addEventListener('pointerdown', ev => { if (ev.button || ev.target.closest('nav, .wheel')) return; ev.preventDefault(); grab(ipod, ev, false); });
-  ipod.el.addEventListener('dblclick', ev => { if (!ev.target.closest('nav, .wheel')) tidy(); });
+  ipod.el.addEventListener('dblclick', ev => { if (!ev.target.closest('nav, .wheel') && !pinned) tidy(); });
   rail.el.addEventListener('pointerdown', ev => { if (!ev.button) grab(rail, ev, false); });
   rail.el.addEventListener('mousedown', ev => ev.preventDefault());  // a drag from the rail does not select the page
   $('wheel').addEventListener('keydown', ev => {  // from the keyboard: Option with left or right parks the iPod on that side
-    if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && ev.altKey) { ev.preventDefault(); ev.stopImmediatePropagation(); park(ipod, ev.key === 'ArrowRight' ? 'right' : 'left'); }
+    if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && ev.altKey && !pinned) { ev.preventDefault(); ev.stopImmediatePropagation(); park(ipod, ev.key === 'ArrowRight' ? 'right' : 'left'); }
   });
   $('tidy').innerHTML = icon('tidy'); $('tidy').addEventListener('click', tidy);
-  function restore(saved) {
+  function restore(saved) {  // the panels start where they were left, without sliding there
+    hold(true); setTimeout(() => hold(false), 100); app.classList.toggle('pinned', pinned);
     app.classList.toggle('swapped', !!saved?.swapped);
     rail.gap = saved?.gap ?? 1; link(!!saved?.linked);
-    all.forEach((p, i) => { const f = saved?.loose?.[i], b = home(p); if (!f) { p.x = b.x; p.y = b.y; p.free = false; p.el.style.translate = ''; return; } const [w, h] = size(p), [x, y] = within(p, f[0] * (innerWidth - w), f[1] * (innerHeight - h)); p.free = true; put(p, x, y); });
+    all.forEach((p, i) => { const f = saved?.loose?.[i]; if (!f) { p.free = false; atHome(p); return; } const [w, h] = size(p), [x, y] = within(p, f[0] * (innerWidth - w), f[1] * (innerHeight - h)); p.free = true; put(p, x, y); });
     tidyButton();
   }
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem('panels')); } catch (e) {}
   restore(saved);
-  addEventListener('resize', () => { hold(true); all.forEach(p => { if (p.free) put(p, ...within(p, p.x, p.y)); else { const b = home(p); p.x = b.x; p.y = b.y; } }); follow(); requestAnimationFrame(() => hold(false)); });
+  addEventListener('resize', () => { hold(true); all.forEach(p => { if (p.free) put(p, ...within(p, p.x, p.y)); else atHome(p); }); follow(); fit(); requestAnimationFrame(() => hold(false)); });
 })();
 (() => {
   const w = $('wheel'), step = Math.PI / 6;  // twelve steps a turn
@@ -2078,7 +2225,7 @@ function searchNow() {
 $('q').addEventListener('input', e => { query = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(searchNow, 80); });
 document.addEventListener('input', e => { if (e.target.id === 'path') { addPath = e.target.value; renderFrame(); } });
 document.addEventListener('change', e => {
-  if (e.target.id === 'addLookup') { addLookup = e.target.checked; try { localStorage.setItem('addLookup', addLookup ? 'on' : 'off'); } catch (err) {} return renderFrame(); }
+  if (e.target.id === 'addLookup') { addLookup = e.target.checked; try { localStorage.setItem('addLookup', addLookup ? 'on' : 'off'); } catch (err) {} prefChanged(); return renderFrame(); }
   const key = e.target.dataset?.addPick; if (key === undefined) return;
   if (e.target.checked) addPicks.add(key); else addPicks.delete(key);
   render();
@@ -2112,11 +2259,11 @@ document.addEventListener('click', async ev => {
   if (d.clearSearch !== undefined) { $('q').value = query = ''; searchNow(); return $('q').focus(); }
   if (d.route) return go(d.route);
   if (d.cf) { coverFilter = d.cf; flowIdx = 0; return render(); }
-  if (d.lv) { try { localStorage.setItem('libView', d.lv); } catch (e) {} return reopen(() => { libView = d.lv; }); }
-  if (d.cv) { try { localStorage.setItem('coverView', d.cv); } catch (e) {} return reopen(() => { coverView = d.cv; }); }
+  if (d.lv) { try { localStorage.setItem('libView', d.lv); } catch (e) {} prefChanged(); return reopen(() => { libView = d.lv; }); }
+  if (d.cv) { try { localStorage.setItem('coverView', d.cv); } catch (e) {} prefChanged(); return reopen(() => { coverView = d.cv; }); }
   if (d.stop !== undefined) { if (demo) { demoStop = true; return; } state.job.cancelled = true; renderActivity(); await api('/api/cancel', {}); return refresh(); }
   if (d.m) return metaAction(d.m);
-  if (d.clickStyle) { clickStyle = d.clickStyle; try { localStorage.setItem('clickSound', clickStyle); } catch (e) {} return play('click'); }
+  if (d.clickStyle) { clickStyle = d.clickStyle; try { localStorage.setItem('clickSound', clickStyle); } catch (e) {} prefChanged(); return play('click'); }
   if (d.sort) return setSort(d.sort);
   if (d.sel) return run(d.sel, route.slice(0, -1), [...picked]);
   if (d.g) return groupAction(d.g);
@@ -2156,7 +2303,8 @@ document.addEventListener('click', async ev => {
   }
   switch (b.id) {
     case 'clearPick': picked.clear(); return render();
-    case 'sound': soundOn = !soundOn; try { localStorage.setItem('sound', soundOn ? 'on' : 'off'); } catch (e) {} return renderFrame();
+    case 'sound': soundOn = !soundOn; try { localStorage.setItem('sound', soundOn ? 'on' : 'off'); } catch (e) {} prefChanged(); return renderFrame();
+    case 'pin': return togglePin();
     case 'artistScan': return job('/api/artist-scan', {});
     case 'find': return job('/api/find-covers', {});
     case 'demoToggle': demo = !demo; dropScreens(); menuOpen = false; return demo ? render() : refresh();  // leaving: back to what is really there
@@ -2233,6 +2381,27 @@ document.addEventListener('keydown', ev => {
   else if (ev.key === 'Home') { flowGo(0); ev.preventDefault(); }
   else if (ev.key === 'End') { flowGo(flowItems.length - 1); ev.preventDefault(); }
   else if (ev.key === 'Enter' && !ev.target.closest('button, a, summary')) { document.querySelector('.fi.c .art')?.click(); ev.preventDefault(); }
+});
+/* Dragging the covers: they follow the pointer, a cover for every 0.6 of a cover's width, and a flick keeps them spinning and settling as the wheel's do. */
+$('main').addEventListener('pointerdown', ev => {
+  if (!flowOn() || ev.button || !ev.target.closest('.flow-stage') || ev.target.closest('.back, button, a, input')) return;
+  const step = (flowEls[Math.round(flowPos)]?.offsetWidth || 300) * .6, x0 = ev.clientX, from = flowPos, last = flowItems.length - 1;
+  let moved = false, lastX = x0, lastT = ev.timeStamp, speed = 0;
+  const move = e => {
+    const dx = e.clientX - x0;
+    if (!moved) { if (Math.abs(dx) < 6) return; moved = true; flowTarget = null; flowVel = 0; document.body.classList.add('flow-dragging'); }
+    if (e.timeStamp > lastT) { speed = -(e.clientX - lastX) / step / ((e.timeStamp - lastT) / 1000); lastX = e.clientX; lastT = e.timeStamp; }
+    flowPos = clamp(from - dx / step, -.35, last + .35); flowDraw();  // past either end it gives a little
+  };
+  const up = e => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    if (!moved) return;  // a click: the cover's own
+    document.body.classList.remove('flow-dragging');
+    const stop = c => { c.stopPropagation(); c.preventDefault(); };  // a drag that ends on a cover does not open it
+    addEventListener('click', stop, { capture: true, once: true }); setTimeout(() => removeEventListener('click', stop, true), 50);
+    flowVel = e.timeStamp - lastT < 80 ? clamp(speed, -FLOW.maxSpeed, FLOW.maxSpeed) : 0; flowTarget = null; flowKick();
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 });
 $('main').addEventListener('wheel', ev => {
   if (!flowOn() || !ev.target.closest('.flow') || ev.target.closest('.sp-list')) return;

@@ -12,12 +12,14 @@ It listens on this Mac only.
 """
 from __future__ import annotations
 import argparse
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,6 +55,8 @@ SONG_COPY = enrich.HOME / "song-copy.json"  # where the last copy of the songs i
 RESTORE_FILE = "restore.json"
 HEALTH = enrich.HOME / "health.json"  # the last check of the iPod
 SETTINGS = enrich.HOME / "settings.json"
+PREF_KEYS = ("theme", "sound", "clickSound", "libView", "coverView", "sort", "colWidths", "addLookup", "panels")  # what a pin keeps
+READ_MODE = "Read mode is on, so nothing is written to the iPod. Switch to Write mode at the foot of the Manage rail."
 CHUNK = 1 << 20
 
 
@@ -145,6 +149,7 @@ class Job:
         self.outcome = None
         self.cancel = threading.Event()  # set to ask a stoppable job to stop; only the copy looks at it
         self.after_write = None  # housekeeping once a write has gone through; it can't undo the write by failing
+        self.read_only = False  # Read mode, chosen on the page: no write starts, whatever the iPod would take
 
     def claim(self) -> bool:
         """The iPod for a moment, outside a job. False when a job or another read has it."""
@@ -163,6 +168,8 @@ class Job:
                 return False
             self.running, self.kind, self.log, self.ok, self.outcome = True, kind, [], None, None
             self.cancel.clear()
+            if self.read_only and kind in WRITES:  # refused here, before a backup or anything else is begun
+                target, then = (lambda log: log(f"error: {READ_MODE}") or False), None
         threading.Thread(target=self._run, args=(target, then), daemon=True).start()
         return True
 
@@ -358,6 +365,14 @@ def load_settings() -> dict:
         return {}
 
 
+def page() -> bytes:
+    """The page, with the preferences pinned on this Mac written in, so it starts with them before it asks for anything."""
+    settings = load_settings()
+    pinned = {"pinned": True, "prefs": settings["prefs"]} if settings.get("pinned") and isinstance(settings.get("prefs"), dict) else None
+    value = json.dumps(pinned).replace("</", "<\\/")  # nothing in it can close the script
+    return PAGE.read_text().replace("window.PINNED = null;", f"window.PINNED = {value};", 1).encode()
+
+
 def load_health() -> dict:
     try:
         return json.loads(HEALTH.read_text())
@@ -430,6 +445,7 @@ class App:
         self.options = options
         self.job = Job()
         self.job.after_write = self.prune_backups
+        self.job.read_only = bool(load_settings().get("readMode"))
         self.library = None
         self.stamp = 0  # goes up with every read of the iPod, so the page can tell when the library is the one it has
         self.missing = []
@@ -592,7 +608,7 @@ class App:
         return {"library": self.library, "stamp": self.stamp, "loadError": self.load_error, "covers": entries, "counts": counts,
                 "job": self.job.snapshot(), "ipodctl": enrich.IPODCTL.exists(),
                 "artistInfo": meta.load_artists(), "storage": self.storage, "reading": self.job.reading, "connected": bool(self.mounts()),
-                "developer": self.options.developer, "writing": self.writing, "ejected": self.ejected, "bothKept": sorted(load_kept()), "songCopy": copy_summary(), "healthIssues": issues(load_health())}
+                "developer": self.options.developer, "readMode": self.job.read_only, "writing": self.writing, "ejected": self.ejected, "bothKept": sorted(load_kept()), "songCopy": copy_summary(), "healthIssues": issues(load_health())}
 
     # -- jobs ----------------------------------------------------------------------------------
 
@@ -1132,7 +1148,7 @@ def make_handler(app: App, port: int):
                 return self._send(403, b"forbidden", "text/plain")
             path = unquote(urlparse(self.path).path)  # a picture kept under its own name can have a space in it
             if path == "/":
-                return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+                return self._send(200, page(), "text/html; charset=utf-8")
             if path.startswith("/assets/") or path == "/favicon.ico":
                 file = ASSETS / ("favicon.png" if path == "/favicon.ico" else Path(path[8:]).name)
                 kind = {".svg": "image/svg+xml", ".png": "image/png"}.get(file.suffix)
@@ -1322,19 +1338,31 @@ def make_handler(app: App, port: int):
                     return self._json({"error": "copy needs confirm: true"}, 400)
                 started = app.copy_songs(dest)
             elif path == "/api/settings":
-                # The app has no command line, so what `--developer` does is a choice on the page, kept on this Mac.
-                if body.get("confirm") is not True or not isinstance(body.get("developer"), bool):
-                    return self._json({"error": "settings need developer and confirm: true"}, 400)
+                # The app has no command line, so what `--developer` does is a choice on the page, kept on this Mac; so is Read mode.
+                changes = {key: body[key] for key in ("developer", "readMode") if isinstance(body.get(key), bool)}
+                if body.get("confirm") is not True or not changes:
+                    return self._json({"error": "settings need developer or readMode, and confirm: true"}, 400)
                 if not app.job.claim():
                     return self._json({"error": BUSY}, 409)
                 try:
-                    app.options.developer = body["developer"]
+                    app.options.developer = changes.get("developer", app.options.developer)
+                    app.job.read_only = changes.get("readMode", app.job.read_only)
                     enrich.HOME.mkdir(parents=True, exist_ok=True)
-                    SETTINGS.write_text(json.dumps({**load_settings(), "developer": body["developer"]}))
-                    app.writing = app.read_writing() if app.mounts() else app.writing
+                    SETTINGS.write_text(json.dumps({**load_settings(), **changes}))
+                    if "developer" in changes and app.mounts():
+                        app.writing = app.read_writing()
                 finally:
                     app.job.release()
-                return self._json({"developer": app.options.developer, "writing": app.writing})
+                return self._json({"developer": app.options.developer, "readMode": app.job.read_only, "writing": app.writing})
+            elif path == "/api/prefs":
+                # Pinned, the page's own preferences are kept here too, so they come back whatever port the page is served on.
+                prefs = body.get("prefs", {})
+                if not isinstance(body.get("pinned"), bool) or not isinstance(prefs, dict) or set(prefs) - set(PREF_KEYS) \
+                        or not all(isinstance(v, str) for v in prefs.values()) or len(json.dumps(prefs)) > 64_000:
+                    return self._json({"error": f"prefs need pinned and strings for {', '.join(PREF_KEYS)}"}, 400)
+                enrich.HOME.mkdir(parents=True, exist_ok=True)
+                SETTINGS.write_text(json.dumps({**load_settings(), "pinned": body["pinned"], "prefs": prefs}))
+                return self._json({"pinned": body["pinned"]})
             elif path == "/api/health":
                 started = app.health_check()
             elif path == "/api/fix-sort":
@@ -1482,8 +1510,13 @@ def main():
     options = parser.parse_args()
     app = App(options)
     options.developer = options.developer or load_settings().get("developer", False)
-    server = ThreadingHTTPServer(("127.0.0.1", options.port), make_handler(app, options.port))
-    print(f"iPod library: http://127.0.0.1:{options.port}  (Ctrl-C to stop)")
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", options.port), make_handler(app, options.port))
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        sys.exit(f"Port {options.port} is already in use, probably by the RePod app or another web.py. Quit that first, or pick another port with --port.")
+    print(f"RePod: http://127.0.0.1:{options.port}  (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -199,7 +199,9 @@ it falls back after a pause; top speed is 24 covers a second. With reduced motio
 - **Adding** can look the songs up first: with Look them up on MusicBrainz first ticked, the button says Look up…, and a stoppable job asks MusicBrainz about the songs while they are still in their folder (`meta.proposals`), writing nothing. Each album it knows is a card, a strong match already ticked. Add to iPod… then adds the songs and gives the ticked ones their names, as one job: `add` takes a file's own tags, so that is an `add` and a `retag`. Off, adding is as fast as it was.
 - **The logo** is the iPod drawn in `assets/` (light, dark and an adaptive version). The
   empty state draws it inline in the page, so it follows the page's own light/dark choice; the tab icon
-  is `favicon.svg`, which follows the Mac. A title on a cover or in a song list copies itself when
+  is the click wheel, `favicon.svg`, which follows the Mac (`favicon.png` is its light version, for browsers
+  that take no SVG). The app's icon is the click wheel too: `app-icon.png`, 1024 px with the margin and
+  shadow of a Mac icon, drawn with `dev/render-icon.swift`, which also draws `apple-touch-icon.png`. A title on a cover or in a song list copies itself when
   double-clicked, and says so.
 - **Suggestions** are one list everywhere (`comboShow`), never the browser's: a field with `data-list` offers what the library has as you type, best matches first with what you typed in bold. Arrow keys and Return choose, Escape closes it and nothing else. It works inside a sheet.
 - **Empty states** say what to do next in one sentence and offer the button that does it, on a little iPod screen. A list that could not be read says that and offers Try again; it never claims there is nothing.

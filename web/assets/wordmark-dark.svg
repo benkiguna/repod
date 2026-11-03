@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 371 150" width="371" height="150" role="img" aria-label="repod">
+  <style>.ink{stroke:#F4F4F1}.ring{fill:#C9CBCF}.btn{fill:#FFFFFF}.gl{stroke:#FFFFFF}.glf{fill:#FFFFFF}</style>
+  <g class="ink" fill="none" stroke-width="18">
+    <path d="M9 40V110M9 79A30 30 0 0 1 39 49H48"/>
+    <path d="M67 75H119A26 26 0 1 0 111.4 93.4"/>
+    <path d="M147 40V140"/>
+    <circle cx="173" cy="75" r="26"/>
+    <circle cx="335" cy="75" r="26"/>
+    <path d="M361 10V110"/>
+  </g>
+  <circle class="ring" cx="254" cy="75" r="36"/>
+  <circle class="btn" cx="254" cy="75" r="14.5"/>
+  <g transform="translate(254 75) scale(0.69) translate(-148 -60)">
+    <path class="gl" d="M143 18.6h10M143 22h10M143 25.4h10" fill="none" stroke-width="1.8" stroke-linecap="round"/>
+    <path class="glf" d="M181.5 55.5L186 60L181.5 64.5ZM186 55.5L190.5 60L186 64.5ZM190.5 55.5h1.6v9h-1.6ZM114.5 55.5L110 60L114.5 64.5ZM110 55.5L105.5 60L110 64.5ZM103.9 55.5h1.6v9h-1.6ZM141.5 93.5L147.5 98L141.5 102.5ZM150 93.5h1.6v9h-1.6ZM153.4 93.5h1.6v9h-1.6Z"/>
+  </g>
+</svg>

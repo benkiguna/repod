@@ -189,3 +189,66 @@ class Allowing(Case):
         self.assertTrue(self.app.job.claim())
         self.addCleanup(self.app.job.release)
         self.assertEqual(self.post("/api/settings", {"developer": True, "confirm": True})[0], 409)
+
+
+class ReadMode(Case):
+    def test_it_refuses_every_write_before_it_starts(self):
+        self.state()
+        status, answer = self.post("/api/settings", {"readMode": True, "confirm": True})
+        self.assertEqual((status, answer["readMode"]), (200, True))
+        self.assertTrue(self.state()["readMode"])
+        before = self.tracks()
+        job = self.job("/api/fix-sort", {"confirm": True})
+        self.assertFalse(job["ok"])
+        self.assertIn("Read mode is on", job["outcome"]["reason"])
+        self.assertEqual(self.tracks(), before)
+        self.assertEqual(self.get("/api/backups")["backups"], [])  # not even the backup a write begins with
+
+    def test_reading_still_works(self):
+        self.state()
+        self.post("/api/settings", {"readMode": True, "confirm": True})
+        self.assertTrue(self.job("/api/health")["ok"])
+
+    def test_it_is_kept_and_taken_back(self):
+        self.state()
+        self.post("/api/settings", {"readMode": True, "confirm": True})
+        self.assertEqual(web.load_settings(), {"readMode": True})
+        self.assertTrue(web.App(self.app.options).job.read_only)  # the next start begins in Read mode
+        self.post("/api/settings", {"readMode": False, "confirm": True})
+        self.assertTrue(self.job("/api/fix-sort", {"confirm": True})["ok"])
+
+    def test_it_needs_confirm(self):
+        self.state()
+        self.assertEqual(self.post("/api/settings", {"readMode": False})[0], 400)
+
+
+class Pinned(Case):
+    prefs = {"theme": "dark", "sound": "off", "panels": '{"swapped":true}'}
+
+    def test_the_page_starts_with_them(self):
+        self.assertIn(b"window.PINNED = null;", self.get("/"))
+        self.assertEqual(self.post("/api/prefs", {"pinned": True, "prefs": self.prefs}), (200, {"pinned": True}))
+        page = self.get("/").decode()
+        self.assertIn('window.PINNED = {"pinned": true, "prefs": {"theme": "dark"', page)
+
+    def test_unpinned_they_are_not_used(self):
+        self.post("/api/prefs", {"pinned": True, "prefs": self.prefs})
+        self.post("/api/prefs", {"pinned": False, "prefs": self.prefs})
+        self.assertIn(b"window.PINNED = null;", self.get("/"))
+
+    def test_nothing_in_them_can_end_the_script(self):
+        self.post("/api/prefs", {"pinned": True, "prefs": {"sort": "</script><script>alert(1)</script>"}})
+        page = self.get("/").decode()
+        self.assertNotIn("</script><script>alert", page)
+
+    def test_only_preferences_are_kept(self):
+        self.assertEqual(self.post("/api/prefs", {"pinned": True, "prefs": {"developer": "true"}})[0], 400)
+        self.assertEqual(self.post("/api/prefs", {"pinned": True, "prefs": {"theme": 1}})[0], 400)
+        self.assertEqual(self.post("/api/prefs", {"prefs": {}})[0], 400)
+        self.assertEqual(web.load_settings(), {})
+
+    def test_they_leave_the_other_settings_alone(self):
+        self.state()
+        self.post("/api/settings", {"developer": True, "confirm": True})
+        self.post("/api/prefs", {"pinned": True, "prefs": self.prefs})
+        self.assertTrue(web.load_settings()["developer"])
