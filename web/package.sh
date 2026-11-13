@@ -44,7 +44,9 @@ if [[ $runtime == bundled ]]; then
         tar -xzf "$work/$file" -C "$target" --strip-components 1
         # What a server with no window and no packages never loads.
         lib="$target/lib/python${python%.*}"
-        rm -rf "$target"/{include,share} "$target"/bin/{pip*,idle*,2to3*,pydoc*} "$lib"/{test,idlelib,tkinter,turtledemo,ensurepip,lib2to3,pydoc_data,site-packages} "$lib"/config-* "$target"/lib/{tcl*,tk*,itcl*,thread*,lib*.a,pkgconfig} 2>/dev/null || true
+        setopt null_glob  # a pattern that finds nothing is left out: zsh would otherwise stop the build at it, whatever follows
+        rm -rf "${target:?}"/{include,share} "${target:?}"/bin/{pip*,idle*,2to3*,pydoc*} "${lib:?}"/{test,idlelib,tkinter,turtledemo,ensurepip,lib2to3,pydoc_data,site-packages} "${lib:?}"/config-* "${target:?}"/lib/{tcl*,tk*,itcl*,thread*,lib*.a,pkgconfig}
+        unsetopt null_glob
         mkdir -p "$lib/site-packages"
         find "$target" -name __pycache__ -type d -prune -exec rm -rf {} +
     done
