@@ -66,6 +66,21 @@ class Rebuild(Case):
             self.job("/api/backup-create")
         self.assertIn(paired, [b["id"] for b in self.get("/api/backups")["backups"]])
 
+    def test_the_backup_of_the_copy_stays_with_its_drive_unplugged(self):
+        self.copy()
+        paired = self.state()["songCopy"]["backup"]
+        unplugged = self.folder.with_name(self.folder.name + "-away")
+        self.folder.rename(unplugged)  # the drive the copy is on, not connected
+        self.addCleanup(lambda: unplugged.exists() and unplugged.rename(self.folder))
+        self.assertIsNone(self.state()["songCopy"])
+        for _ in range(12):
+            self.job("/api/backup-create")
+        listed = {b["id"]: b for b in self.get("/api/backups")["backups"]}
+        self.assertTrue(listed[paired]["paired"])
+
+    def test_ipodctl_is_never_left_to_prune_by_its_own_rule(self):
+        self.assertIn("--keep-backups", self.app.ctl("add", "x"))  # its seven days would take starred backups and the copy's
+
     def test_after_a_reset_everything_comes_back(self):
         self.copy()
         self.reset()

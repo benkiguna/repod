@@ -11,7 +11,8 @@ import unittest
 import urllib.request
 from pathlib import Path
 
-from harness import Case, DEV, real_urlopen, web
+from harness import Case, DEV, enrich, real_urlopen, serve, web
+import meta  # noqa: E402  (after harness, which sets up the environment)
 
 
 class Outcome(unittest.TestCase):
@@ -233,48 +234,121 @@ class Mode(Case):
 
 
 class AddWithNames(Case):
-    def folder(self):
+    """Adding after a MusicBrainz lookup: each song is chosen on its own, and the choices go in with it in one write."""
+    def folder(self, cover=False):
         album = Path(tempfile.mkdtemp()) / "Fake Release"
         album.mkdir()
         for name in ("01 Song 1.mp3", "02 Song 2.mp3"):
             (album / name).write_bytes(b"x")
+        if cover:
+            (album / "cover.png").write_bytes(serve.noise_png("folder"))
         return album
 
-    def test_what_add_would_add_is_read_from_its_preview(self):
-        lines = ["Files found: 2", "    01 One", "      Band / Record  MP3 192 kbps  4 MB", "       Two", "      ? / ?  MP3 192 kbps  4 MB", "      the iPod will not play this: no"]
-        self.assertEqual([(s["track"], s["title"], s["artist"], s["album"]) for s in web.read_drafts(lines)], [(1, "One", "Band", "Record"), (0, "Two", "", "")])
+    def looked_up(self, **kw):
+        folder = self.folder(**kw)
+        self.state()
+        self.assertTrue(self.job("/api/add-lookup", {"path": str(folder)})["ok"])
+        return folder, self.get("/api/add-review")
 
-    def test_looking_up_writes_nothing(self):
+    def test_looking_up_writes_nothing_and_gives_each_song_its_candidates(self):
         folder = self.folder()
         count = len(self.state()["library"]["songs"])
         self.assertTrue(self.job("/api/add-lookup", {"path": str(folder)})["ok"])
         self.assertEqual(len(self.tracks()), count)
         review = self.get("/api/add-review")
-        self.assertEqual(len(review["songs"]), 2)
-        self.assertTrue(review["proposals"])
+        self.assertEqual([s["title"] for s in review["songs"]], ["Song 1", "Song 2"])
+        self.assertEqual(review["songs"][0]["seconds"], 200)
+        first = review["matches"][review["songs"][0]["path"]]
+        self.assertGreater(len(first), 1, "more than one to choose from")
+        self.assertEqual((first[0]["album"], first[0]["track"], first[0]["level"]), ("Fake Release", 1, "high"))
+        self.assertTrue(first[0]["cover"].startswith("https://coverartarchive.org/release/"))
 
-    def test_accepted_names_reach_the_new_songs(self):
-        folder = self.folder()
-        self.state()
-        self.job("/api/add-lookup", {"path": str(folder)})
-        proposal = self.get("/api/add-review")["proposals"][0]
-        job = self.job("/api/add", {"path": str(folder), "confirm": True, "accepted": [proposal["key"]]})
-        self.assertEqual(job["outcome"]["summary"], "Added 2 songs to the iPod")
-        added = [t for t in self.tracks() if t["title"] in ("Song 1", "Song 2")]
-        self.assertEqual({t["album"] for t in added}, {proposal["album"]})
-        self.assertEqual({t["albumArtist"] for t in added}, {proposal["albumArtist"]})
-        self.assertEqual(self.get("/api/add-review"), {})
+    def test_the_cover_the_files_have_is_shown(self):
+        _, review = self.looked_up(cover=True)
+        name = review["songs"][0]["art"]
+        status, _ = self.request(f"/add-art/{name}")
+        self.assertEqual(status, 200)
+
+    def test_each_song_goes_in_with_its_own_values_and_one_can_be_left_out(self):
+        folder, review = self.looked_up()
+        one, two = (s["path"] for s in review["songs"])
+        songs = [{"path": one, "set": {"title": "Opening", "album": "Chosen Album", "albumartist": "Chosen Artist", "year": 2001, "track": 7, "compilation": True}},
+                 {"path": two, "skip": True}]
+        job = self.job("/api/add", {"path": str(folder), "confirm": True, "songs": songs})
+        self.assertEqual(job["outcome"]["summary"], "Added 1 song to the iPod")
+        added = [t for t in self.tracks() if t["title"] == "Opening"]
+        self.assertEqual([(t["album"], t["albumArtist"], t["year"], t["trackNumber"], t["compilation"]) for t in added], [("Chosen Album", "Chosen Artist", 2001, 7, True)])
+        self.assertFalse([t for t in self.tracks() if t["title"] == "Song 2"])
+        self.assertEqual(self.get("/api/add-review"), {}, "what was added leaves the review")
+
+    def test_a_cover_picked_for_a_new_album_goes_in_with_it(self):
+        folder, review = self.looked_up()
+        status, picked = self.post("/api/add-cover-prepare", {"url": "https://coverartarchive.org/release/2222/front-500"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.request(picked["image"])[0], 200)
+        songs = [{"path": s["path"], "cover": picked["name"]} for s in review["songs"]]
+        self.assertTrue(self.job("/api/add", {"path": str(folder), "confirm": True, "songs": songs})["ok"])
+        manifest = json.loads((enrich.HOME / "add-manifest.json").read_text())
+        self.assertTrue(all(Path(f["cover"]).name == picked["name"] for f in manifest["files"]))
+
+    def test_what_the_page_cannot_vouch_for_is_refused(self):
+        folder, review = self.looked_up()
+        path = review["songs"][0]["path"]
+        for songs in ([{"path": "/etc/passwd"}], [{"path": path, "set": {"rating": 5}}], [{"path": path, "set": {"year": "1999"}}],
+                      [{"path": path, "cover": "../../secret.png"}], [{"path": s["path"], "skip": True} for s in review["songs"]]):
+            with self.subTest(songs=songs):
+                self.assertEqual(self.post("/api/add", {"path": str(folder), "confirm": True, "songs": songs})[0], 400)
 
     def test_an_answer_for_another_folder_is_refused(self):
-        folder = self.folder()
-        self.state()
-        self.job("/api/add-lookup", {"path": str(folder)})
-        status, answer = self.post("/api/add", {"path": str(folder.parent), "confirm": True, "accepted": ["x"]})
+        folder, _ = self.looked_up()
+        status, answer = self.post("/api/add", {"path": str(folder.parent), "confirm": True, "songs": []})
         self.assertEqual(status, 400)
         self.assertIn("Look these songs up again", answer["error"])
+
+    def test_choices_stay_with_the_review(self):
+        folder, review = self.looked_up()
+        choices = {"songs": {review["songs"][0]["path"]: {"pick": "file", "edit": {"title": "Kept"}, "skip": False}}, "covers": {}}
+        self.assertEqual(self.post("/api/add-choices", {"path": str(folder), "choices": choices})[0], 200)
+        self.assertEqual(self.get("/api/add-review")["choices"], choices)
+        self.assertEqual(self.post("/api/add-choices", {"path": "/elsewhere", "choices": choices})[0], 400)
+
+    def test_a_song_can_be_searched_for_with_other_words(self):
+        self.state()
+        status, answer = self.post("/api/add-search", {"title": "Other Song", "artist": "Fake Artist", "album": "Fake Release", "track": 2, "seconds": 201})
+        self.assertEqual(status, 200)
+        self.assertEqual(answer["results"][0]["title"], "Other Song")
+        self.assertEqual(self.post("/api/add-search", {"artist": "Fake Artist"})[0], 400)
 
     def test_without_the_option_nothing_changes(self):
         folder = self.folder()
         self.state()
         self.assertEqual(self.job("/api/add", {"path": str(folder), "confirm": True})["outcome"]["summary"], "Added 2 songs to the iPod")
         self.assertEqual({t["album"] for t in self.tracks() if t["title"] == "Song 1"}, {"Fake Release"})
+
+
+class SongQueries(unittest.TestCase):
+    """What a song still in its folder is looked up with: everything its file knows, and only the title required."""
+    song = {"title": "Open Water", "artist": "Mira Vale feat. Someone", "album": "Tideline (Deluxe)", "year": 2017, "track": 3, "tracks": 12, "seconds": 241.5}
+
+    def test_every_known_field_raises_a_result_and_only_the_title_is_required(self):
+        first = meta.recording_queries(self.song)[0]
+        self.assertTrue(first.startswith('+recording:"Open Water"'))
+        for part in ('artist:"Mira Vale"^3', 'release:"Tideline"^2', "dur:[237500 TO 245500]^2", "tnum:3", "tracks:12", "date:2017*"):
+            self.assertIn(part, first)
+        self.assertNotIn("+artist", first, "a wrong artist must not hide the right recording")
+
+    def test_ids_come_first(self):
+        queries = meta.recording_queries({**self.song, "isrc": "gb-aaa-17-00001", "mbRecording": "abc"})
+        self.assertEqual(queries[:2], ["rid:abc", "isrc:GBAAA1700001"])
+
+    def test_a_song_whose_name_says_nothing_is_found_by_its_album_and_place(self):
+        queries = meta.recording_queries({**self.song, "title": "Track 03"})
+        self.assertEqual(len(queries), 1)
+        self.assertTrue(queries[0].startswith('+release:"Tideline" +artist:"Mira Vale"'))
+        self.assertIn("tnum:3^4", queries[0])
+
+    def test_what_the_file_does_not_know_is_not_held_against_a_candidate(self):
+        bare = {"title": "Open Water", "artist": "Mira Vale"}
+        right = {"title": "Open Water", "artist": "Mira Vale", "albumartist": "Mira Vale", "album": "Tideline", "seconds": 300, "year": 1990}
+        self.assertGreaterEqual(meta.candidate_score(bare, right), 0.95)
+        self.assertLess(meta.candidate_score(self.song, right), meta.candidate_score(self.song, {**right, "seconds": 241, "year": 2017}))

@@ -10,6 +10,7 @@ Nothing is written here. A proposal is a list of values per song; `ipodctl retag
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -402,6 +403,240 @@ def lookup(mode: str, title: str = "", artist: str = "", album: str = "") -> lis
         for r in (mb("artist/", query=search_words(artist) or artist, limit=8) or {}).get("artists", []):
             add({"artist": clean(r.get("name", "")), "note": r.get("disambiguation") or r.get("type") or ""})
     return found
+
+
+# -- songs being added ----------------------------------------------------------------------------
+# A song still in its folder is looked up with everything its file knows, not only its name: the album, the
+# artist, its length, its place on the disc, how many tracks the disc has, the year, and an ISRC or the
+# MusicBrainz ids when the file carries them. Only the title (or an id) is required; every other field only
+# raises a recording or release that agrees, so a typo in one of them never hides the right answer. Each song
+# gets several candidates, best first, and the page lets you take one, change it, or keep the file's tags.
+
+SONG_FIELDS = ("title", "artist", "album", "albumartist", "year", "track", "tracks", "disc", "discs")
+GENERIC_TITLE = re.compile(r"^(track|audio track|piste|titel|untitled|unknown)?\s*\d*$", re.I)  # what a ripper names a song it knows nothing of
+
+
+def similar(a: str, b: str) -> float:
+    """`enrich.similar`, and for names it cannot compare (it keeps only a-z and digits) the words themselves, so a
+    Kannada or Japanese title is scored instead of counting as nothing."""
+    if enrich.normalize(a) and enrich.normalize(b):
+        return enrich.similar(a, b)
+    a, b = search_words(a).casefold(), search_words(b).casefold()
+    return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
+
+
+def hints(song: dict, with_album: bool = True) -> str:
+    """The optional clauses: each one that matches raises a recording, none of them is needed."""
+    found = []
+    who = first_credit(song.get("artist") or song.get("albumartist") or "")
+    if who and who.lower() != "various artists":
+        found.append(f'artist:"{enrich.lucene(search_words(who) or who)}"^3')
+    if with_album and song.get("album"):
+        found.append(f'release:"{enrich.lucene(search_words(song["album"]) or song["album"])}"^2')
+    if song.get("seconds"):
+        ms = int(song["seconds"] * 1000)
+        found.append(f"dur:[{max(0, ms - 4000)} TO {ms + 4000}]^2")
+    if song.get("track"):
+        found.append(f"tnum:{int(song['track'])}")
+    if song.get("tracks"):
+        found.append(f"tracks:{int(song['tracks'])}")
+    if song.get("year"):
+        found.append(f"date:{int(song['year'])}*")
+    found += ["status:official", "primarytype:album", "video:false"]
+    return " ".join(found)
+
+
+def recording_queries(song: dict) -> list:
+    """From strict to loose: the ids first, then the title as a phrase, as words, roughly, and, for a song whose name
+    says nothing ("Track 03"), its album, artist and place on the disc instead."""
+    found = []
+    if song.get("mbRecording"):
+        found.append(f"rid:{enrich.lucene(song['mbRecording'])}")
+    if song.get("isrc"):
+        found.append(f"isrc:{enrich.lucene(song['isrc'].replace('-', '').upper())}")
+    title = split_title({"title": song.get("title") or "", "artist": song.get("artist") or ""})[0]
+    words = search_words(title)
+    if words and not GENERIC_TITLE.match(words):
+        tokens = [enrich.lucene(w) for w in words.split()]
+        extra = hints(song)
+        found.append(f'+recording:"{enrich.lucene(words)}" {extra}')
+        if len(tokens) > 1:
+            found.append(f"+({' AND '.join(f'recording:{t}' for t in tokens)}) {extra}")
+        found.append(f"+({' AND '.join(f'recording:{t}~' for t in tokens)}) {extra}")
+    who = first_credit(song.get("artist") or song.get("albumartist") or "")
+    if song.get("album") and who:
+        required = f'+release:"{enrich.lucene(search_words(song["album"]) or song["album"])}" +artist:"{enrich.lucene(search_words(who) or who)}"'
+        found.append(f"{required} {hints({**song, 'artist': '', 'albumartist': '', 'track': 0}, with_album=False)}" + (f" tnum:{int(song['track'])}^4" if song.get("track") else ""))
+    return found
+
+
+def candidate_score(song: dict, c: dict) -> float:
+    """How well a candidate fits what the file says. Only what the file knows is weighed, so a file without a year or
+    a length is not punished for it, and a title that says nothing is not counted against the right recording."""
+    parts = []
+    title = split_title({"title": song.get("title") or "", "artist": song.get("artist") or ""})[0]
+    named = bool(title) and not GENERIC_TITLE.match(search_words(title))
+    if named:
+        parts.append((0.35, similar(title, c["title"])))
+    who = first_credit(song.get("artist") or song.get("albumartist") or "")
+    if who:
+        parts.append((0.25, max(similar(who, c["artist"]), similar(who, c["albumartist"]))))
+    if song.get("album"):
+        parts.append((0.15, similar(song["album"], c["album"])))
+    if song.get("seconds") and c.get("seconds"):
+        gap = abs(song["seconds"] - c["seconds"])
+        parts.append((0.15, 1.0 if gap <= 3 else max(0.0, 1 - (gap - 3) / 12)))
+    if song.get("track") and c.get("track"):
+        parts.append((0.04 if named else 0.3, 1.0 if song["track"] == c["track"] else 0.0))  # without a name, its place on the album is what says which song it is
+    if song.get("tracks") and c.get("tracks"):
+        parts.append((0.03, 1.0 if song["tracks"] == c["tracks"] else 0.0))
+    if song.get("year") and c.get("year"):
+        parts.append((0.03, 1.0 if song["year"] == c["year"] else 0.5 if abs(song["year"] - c["year"]) <= 1 else 0.0))
+    if not parts:
+        return 0.0
+    score = sum(w * v for w, v in parts) / sum(w for w, _ in parts)
+    if song.get("mbRecording") and c.get("recording") == song["mbRecording"] or song.get("mbRelease") and c.get("release") == song["mbRelease"]:
+        score = max(score, 0.95)  # the file was tagged from this very entry
+    bonus = (0.02 if c.get("official") else 0) + (0.05 if c.get("whole") else 0)  # one release for the whole folder keeps an album together
+    return round(min(1.0, score + bonus), 3)
+
+
+def cover_links(release: str, group: str = "") -> dict:
+    """The Cover Art Archive's front image of a release, or of its release group when the release has none of its own."""
+    if not release:
+        return {}
+    links = {"cover": f"https://coverartarchive.org/release/{release}/front-250", "coverLarge": f"https://coverartarchive.org/release/{release}/front-500"}
+    if group:
+        links["coverGroup"] = f"https://coverartarchive.org/release-group/{group}/front-500"
+    return links
+
+
+def from_recording(r: dict) -> list:
+    """One candidate for each release a recording is on, with its place on that release."""
+    found = []
+    for rel in r.get("releases") or []:
+        group = rel.get("release-group") or {}
+        media = (rel.get("media") or [{}])[0]
+        track = (media.get("track") or [{}])[0]
+        number = track.get("number") or ""
+        position = int(number) if str(number).isdigit() else 0
+        offset = media.get("track-offset")
+        if not position and isinstance(offset, int):
+            position = offset + 1
+        discs = rel.get("count") if isinstance(rel.get("count"), int) else 0
+        kinds = [group.get("primary-type") or ""] + (group.get("secondary-types") or [])
+        found.append({"recording": r.get("id", ""), "release": rel.get("id", ""), "title": clean(track.get("title") or r.get("title", "")),
+                      "artist": credit(r.get("artist-credit")), "album": clean(rel.get("title", "")),
+                      "albumartist": credit(rel.get("artist-credit")) or credit(r.get("artist-credit")),
+                      "year": year_of(rel.get("date")), "track": position, "tracks": int(media.get("track-count") or 0),
+                      "disc": int(media.get("position") or 0) if discs > 1 else 0, "discs": discs if discs > 1 else 0,
+                      "seconds": round((track.get("length") or r.get("length") or 0) / 1000), "official": rel.get("status") == "Official",
+                      "note": " · ".join(x for x in [" ".join(k for k in kinds if k), rel.get("country") or "", (media.get("format") or "")] if x),
+                      **cover_links(rel.get("id", ""), group.get("id", ""))})
+    return found
+
+
+def from_release(info: dict, track: dict, release: dict | None = None) -> dict:
+    """A candidate for a song matched to a track of a release that was read whole."""
+    group = (release or {}).get("release-group") or {}
+    return {"recording": track.get("recording") or "", "release": info["id"], "title": track["title"], "artist": track["artist"],
+            "album": info["title"], "albumartist": info["artist"], "year": info["year"], "track": track["pos"], "tracks": track["of"],
+            "disc": track["disc"] if track["discs"] > 1 else 0, "discs": track["discs"] if track["discs"] > 1 else 0,
+            "seconds": round((track.get("ms") or 0) / 1000), "official": (release or {}).get("status", "Official") == "Official",
+            "note": "the whole album matched", "whole": True, **cover_links(info["id"], group.get("id", ""))}
+
+
+def rank(song: dict, candidates: list, limit: int = 8) -> list:
+    """Scored, best first, one of each: two releases that give a song the same values are one choice."""
+    seen, found = set(), []
+    for c in sorted(({**c, "score": candidate_score(song, c)} for c in candidates), key=lambda c: -c["score"]):
+        key = tuple(c.get(k) for k in SONG_FIELDS)
+        if key in seen or c["score"] < 0.35:
+            continue
+        seen.add(key)
+        found.append({**c, "level": level(c["score"]), "id": hashlib.sha1(repr(key).encode()).hexdigest()[:12]})
+        if len(found) >= limit:
+            break
+    return found
+
+
+def search_song(song: dict, enough: int = 12) -> list:
+    """Candidates for one song, from as many of the queries as it takes to have a few to choose from."""
+    found, asked = [], 0
+    for query in recording_queries(song):
+        recordings = (mb("recording/", query=query, limit=15) or {}).get("recordings", [])
+        asked += 1
+        for r in recordings:
+            found += from_recording(r)
+        if len({c["recording"] for c in found}) >= enough or asked >= 3 or (found and query.startswith(("rid:", "isrc:"))):
+            break
+    return rank(song, found)
+
+
+def search_album(songs: list) -> dict:
+    """path -> a candidate from the one release the whole folder fits best, so an album gets one set of numbers."""
+    first = songs[0]
+    album, who = first.get("album") or "", first_credit(first.get("albumartist") or first.get("artist") or "")
+    info, release = None, None
+    if first.get("mbRelease") and all(s.get("mbRelease") == first["mbRelease"] for s in songs):
+        info = release_info(first["mbRelease"])
+    if info is None and album:
+        query = f'+release:"{enrich.lucene(search_words(album) or album)}"'
+        if who and who.lower() != "various artists":
+            query += f' artist:"{enrich.lucene(search_words(who) or who)}"^3'
+        count = max([len(songs)] + [s.get("tracks") or 0 for s in songs])
+        years = {s["year"] for s in songs if s.get("year")}
+        query += f" tracks:{count}^2" + (f" date:{min(years)}*" if years else "") + " status:official primarytype:album"
+        best = None
+        for r in (mb("release/", query=query, limit=10) or {}).get("releases", []):
+            fit = similar(album, r.get("title", ""))
+            if fit < 0.6:
+                continue
+            owner = similar(who, credit(r.get("artist-credit"))) if who and who.lower() != "various artists" else 0.8
+            tracks = r.get("track-count") or 0
+            key = (fit * 0.6 + owner * 0.4, r.get("status") == "Official", tracks >= len(songs), -abs(tracks - count))
+            if best is None or key > best[0]:
+                best = (key, r)
+        if best and best[0][0] >= 0.65:
+            release = best[1]
+            info = release_info(release["id"])
+    if not info:
+        return {}
+    found = match_tracks([{**s, "id": s["path"]} for s in songs], info["tracks"])
+    return {path: from_release(info, track, release) for path, (track, _) in found.items()}
+
+
+def look_up_songs(songs: list, log=print, stop=lambda: False) -> dict:
+    """path -> candidates, for songs still in their folder. Albums are asked as albums first, then every song on its
+    own, so each has other choices too. Nothing is kept here and nothing is written."""
+    albums = defaultdict(list)
+    for s in songs:
+        if s.get("album"):
+            albums[(s.get("albumartist") or s.get("artist") or "", s["album"])].append(s)
+    whole = {}
+    for (owner, name), group in albums.items():
+        if stop() or len(group) < 2:
+            continue
+        try:
+            whole.update(search_album(group))
+            log(f"Album {name}: {sum(1 for s in group if s['path'] in whole)} of {len(group)} songs found on one release")
+        except enrich.LOOKUP_FAILED as error:
+            log(f"Album {name}: failed ({type(error).__name__})")
+    matches = {}
+    for n, s in enumerate(songs, 1):
+        if stop():
+            break
+        try:
+            found = search_song(s)
+        except enrich.LOOKUP_FAILED as error:
+            log(f"[{n}/{len(songs)}] {s['title']} - failed ({type(error).__name__})")
+            found = []
+        if s["path"] in whole:
+            found = rank(s, [whole[s["path"]]] + found)
+        matches[s["path"]] = found
+        best = found[0] if found else None
+        log(f"[{n}/{len(songs)}] {s['title']} - " + (f"{len(found)} found, best: {best['title']} on {best['album']}" if best else "not found"))
+    return matches
 
 
 # -- artists ------------------------------------------------------------------------------------

@@ -86,7 +86,19 @@ def canned(url: str) -> bytes:
             return json.dumps({"title": "Fake Release", "date": "1999-01-01", "artist-credit": [{"name": "Fake Artist"}], "release-group": {"first-release-date": "1999"},
                                "media": [{"position": 1, "track-count": 3, "tracks": [{"title": f"Song {n}", "position": n, "recording": {"id": f"r{n}", "title": f"Song {n}"}} for n in (1, 2, 3)]}]}).encode()
         if path == "recording/":
-            return json.dumps({"recordings": []}).encode()
+            if "nothing" in text.lower() or text.startswith(("rid:", "isrc:")):
+                return json.dumps({"recordings": []}).encode()
+            def release(rid, album, kind, year, number, count):
+                return {"id": rid, "title": album, "status": "Official", "date": f"{year}-03-01", "country": "GB", "count": 1,
+                        "release-group": {"id": f"g{rid}", "primary-type": kind}, "artist-credit": [{"name": "Fake Artist"}],
+                        "media": [{"position": 1, "format": "CD", "track-count": count, "track-offset": number - 1,
+                                   "track": [{"id": f"t{rid}{number}", "number": str(number), "title": text, "length": 201000}]}]}
+            number = int(m[0]) if (m := re.search(r"\d+$", text)) else 1
+            return json.dumps({"recordings": [
+                {"id": f"rec-{text}", "title": text, "length": 201000, "artist-credit": [{"name": "Fake Artist"}],
+                 "releases": [release("2222", "Fake Release", "Album", 1999, number, 3), release("4444", "Fake Hits", "Compilation", 2005, number + 4, 18)]},
+                {"id": f"live-{text}", "title": f"{text} (live)", "length": 260000, "artist-credit": [{"name": "Fake Artist"}],
+                 "releases": [release("5555", "Fake Live", "Album", 2001, number, 9)]}]}).encode()
         if path == "artist/":
             return json.dumps({"artists": [{"id": "3333", "name": query.get("query", ""), "type": "Group"}]}).encode()
         if path.startswith("artist/"):

@@ -19,8 +19,8 @@ public enum AudioImport {
         /// into the database in this form - it goes through conversion or drops out.
         public let verdict: AudioCompatibility.Verdict
         public let formatLabel: String
-        /// Artwork embedded in the file, if any.
-        public let artwork: Data?
+        /// Artwork embedded in the file, if any. A choice made before adding can drop it (`AdditionManifest`).
+        public var artwork: Data?
         /// An artwork file lying next to it in the folder (cover.jpg, folder.jpg...).
         /// Used when the tags have nothing - that is how most ripped albums
         /// keep their artwork.
@@ -29,6 +29,9 @@ public enum AudioImport {
         /// everything else: it is the only source that comes directly from
         /// the user, and the other two are guesses - good ones, but guesses.
         public var chosenCover: URL?
+        /// What identifies the recording outside its tags, when the file carries it: an ISRC, and the
+        /// MusicBrainz recording and release ids that Picard writes. A lookup can start from these.
+        public var identifiers = Identifiers()
 
         /// Where to get artwork for this album, if at all.
         public var coverSource: CoverSource? {
@@ -63,6 +66,17 @@ public enum AudioImport {
             case .embedded: return "from the file's tags"
             case .file(let url): return "from \(url.lastPathComponent)"
             }
+        }
+    }
+
+    public struct Identifiers: Sendable, Hashable {
+        public var isrc: String?
+        public var musicBrainzRecording: String?
+        public var musicBrainzRelease: String?
+        public init(isrc: String? = nil, musicBrainzRecording: String? = nil, musicBrainzRelease: String? = nil) {
+            self.isrc = isrc
+            self.musicBrainzRecording = musicBrainzRecording
+            self.musicBrainzRelease = musicBrainzRelease
         }
     }
 
@@ -133,9 +147,17 @@ public enum AudioImport {
             sampleRate: UInt32(clamping: stream.sampleRate),
             kind: kind, relativePath: "")
 
-        return Candidate(url: url, draft: draft, verdict: verdict,
-                         formatLabel: AudioCompatibility.label(for: stream),
-                         artwork: await artwork(all))
+        var candidate = Candidate(url: url, draft: draft, verdict: verdict,
+                                  formatLabel: AudioCompatibility.label(for: stream),
+                                  artwork: await artwork(all))
+        // Picard writes the ids as Vorbis tags; in MP3 and M4A they sit in fields AVFoundation does not name.
+        var isrc = await string(all, .id3MetadataInternationalStandardRecordingCode)
+        if isrc == nil { isrc = await vorbisString(all, "ISRC") }
+        candidate.identifiers = Identifiers(
+            isrc: isrc,
+            musicBrainzRecording: await vorbisString(all, "MUSICBRAINZ_TRACKID"),
+            musicBrainzRelease: await vorbisString(all, "MUSICBRAINZ_ALBUMID"))
+        return candidate
     }
 
     /// Reads a folder or a list of files; folders are walked recursively.

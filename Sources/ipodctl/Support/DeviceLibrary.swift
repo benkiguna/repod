@@ -38,6 +38,7 @@ struct DeviceLibrary {
                                            environment: call.environment, note: note)
         transaction.expectedSourceDigest = digest
         transaction.allowWhileMusicRunning = call.has("--allow-music")
+        if call.has("--keep-backups") { transaction.backupRetention = .keepEverything }  // the web page keeps backups by its own rule
         transaction.orderIntentJumpTable = jumpTable
         transaction.progress = { print("  \($0)") }
         do { return try await transaction.run().outcome } catch { throw CommandError("\(error) - the database was not written") }

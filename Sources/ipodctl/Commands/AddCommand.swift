@@ -2,14 +2,24 @@ import Foundation
 import ITDBKit
 import RePodCore
 
-/// `add FILE|FOLDER ... [--title T] [--artist A] [--album B] [--track N] [--apply]`
+/// `add FILE|FOLDER ... [--title T] [--artist A] [--album B] [--track N] [--manifest CHOICES.json] [--apply]`
 /// - adding tracks to the library; without `--apply` only a preview.
+/// `--json [--art-dir DIR]` lists what the files say, as JSON, and touches no iPod (see `AdditionListing`).
+/// `--manifest` gives files other values, another cover or none, or leaves them out (see `AdditionManifest`).
 enum AddCommand {
+    static let valueFlags: Set<String> = ["--title", "--artist", "--album", "--track", "--manifest", "--art-dir"]
+
     static func run(_ call: Invocation) async throws {
-        let device = try openDevice(call)
-        let sources = call.positional(valueFlags: ["--title", "--artist", "--album", "--track"])
+        let sources = call.positional(valueFlags: valueFlags)
             .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
         guard !sources.isEmpty else { throw CommandError("give files or folders to add") }
+        if call.has("--json") {
+            let (candidates, problems) = await AudioImport.candidates(at: sources)
+            let artDirectory = call.value(for: "--art-dir").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            try AdditionListing(candidates, problems: problems, artDirectory: artDirectory).print()
+            return
+        }
+        let device = try openDevice(call)
 
         var (candidates, problems) = await AudioImport.candidates(at: sources)
         for problem in problems { print("  SKIPPED: \(problem)") }
@@ -30,6 +40,14 @@ enum AddCommand {
             guard candidates.count == 1 else { throw CommandError("\(single.joined(separator: ", ")) works only with a single file") }
             if let t = call.value(for: "--title") { candidates[0].draft.title = t }
             if let n = call.value(for: "--track").flatMap({ UInt32($0) }) { candidates[0].draft.trackNumber = n }
+        }
+        if let path = call.value(for: "--manifest") {
+            let manifest = try AdditionManifest.read(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+            let outcome = try manifest.applied(to: candidates)
+            for title in outcome.skipped { print("  SKIPPED: \(title): left out when reviewed") }
+            for path in outcome.unknown { print("  SKIPPED: \(path): not among the files to add") }
+            candidates = outcome.candidates
+            guard !candidates.isEmpty else { throw CommandError("every file was left out") }
         }
 
         let onDevice = try DeviceLibrary(reading: device, for: call)

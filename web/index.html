@@ -332,7 +332,7 @@ function askForm({ title, message = '', fields, ok = 'OK', lookup = null, check 
     claimSheet(resolve);
     sheet.classList.remove('wide');
     $('sheetBody').innerHTML = `<h2>${esc(title)}</h2><p>${esc(message)}</p>
-      <div class="form">${fields.map((f, i) => f.tick ? `<label class="tick"><input type="checkbox" name="${f.name}" ${f.value ? 'checked' : ''}>${esc(f.label)}</label>` : `<label><span>${esc(f.label)}</span>
+      <div class="form">${fields.map((f, i) => f.tick ? `<label class="tick"><input type="checkbox" name="${f.name}" ${f.value ? 'checked' : ''}>${esc(f.label)}</label>` : `<label${f.half ? ' class="half"' : ''}><span>${esc(f.label)}</span>
         <input type="text" name="${f.name}" value="${esc(f.value || '')}" placeholder="${esc(f.placeholder || '')}" autocomplete="off" ${f.list ? `data-list="dl${i}" role="combobox" aria-autocomplete="list" aria-expanded="false"` : ''}>
         ${f.list ? `<datalist id="dl${i}">${f.list.map(x => `<option value="${esc(x)}">`).join('')}</datalist>` : ''}</label>`).join('')}</div>
       <div class="form-note" role="alert"></div>
@@ -903,31 +903,248 @@ document.addEventListener('dblclick', e => {
 });
 
 /* -------------------------------------------------------------- add songs */
-/* Adding, with MusicBrainz first if asked: the songs are looked up while they are still in their folder, you choose what to use, and then they go in with those names. */
-let addLookup = false, addReview = null, addOpen = new Set();
-const addPicks = new Set();
+/* Adding, with MusicBrainz first if asked. Every song is looked up while it is still in its folder, with all its file knows, and gets a few candidates.
+   For each song you take one, change what it says, or keep the file's tags; a song can be left out, and songs can be put into an album that is on the iPod
+   or a new one. Each album being made gets a cover. Nothing is written until Add to iPod, and then it all goes in at once, in one write. */
+let addLookup = false, addReview = null, addChoice = {}, addCovers = {}, addSaveTimer = null;
+const addSel = new Set();  // ticked paths
 try { addLookup = localStorage.getItem('addLookup') === 'on'; } catch (e) {}
-const addReady = () => addReview && addReview.path === addPath.trim();
+const addReady = () => !!addReview && addReview.path === addPath.trim();
 const LEVEL_WORD = { high: 'Strong match', medium: 'Check this', low: 'Weak match' };
+const ADD_TEXT = ['title', 'artist', 'album', 'albumartist', 'genre'], ADD_NUM = ['year', 'track', 'tracks', 'disc', 'discs'];
+const ADD_LABEL = { title: 'name', artist: 'artist', album: 'album', albumartist: 'album artist', genre: 'genre', year: 'year', track: 'track', tracks: 'of tracks', disc: 'disc', discs: 'of discs', compilation: 'compilation' };
 async function loadAddReview() {
-  try { const r = demo ? { path: addPath.trim(), songs: [], proposals: [] } : await api('/api/add-review', undefined, { quiet: true }); addReview = r.path ? r : null; } catch (e) { addReview = null; }
-  addPicks.clear(); for (const p of addReview?.proposals ?? []) if (p.level === 'high') addPicks.add(p.key);
+  try { const r = demo ? { path: addPath.trim(), songs: [], matches: {}, choices: {} } : await api('/api/add-review', undefined, { quiet: true }); addReview = r.path ? r : null; } catch (e) { addReview = null; }
+  addSel.clear();
+  addChoice = addReview?.choices?.songs ?? {}; addCovers = addReview?.choices?.covers ?? {};
+  for (const s of addReview?.songs ?? []) if (!addChoice[s.path]) { const best = addMatches(s)[0]; addChoice[s.path] = { pick: best?.level === 'high' ? best.id : 'file', edit: {} }; }
   if (route === 'add') render();
 }
-function addCard(p) {
-  const on = addPicks.has(p.key), facts = [p.albumArtist, p.year || ''].filter(Boolean).join(' · ');
-  return `<div class="mp ${on ? 'accepted' : ''}"><div class="mp-head"><input type="checkbox" data-add-pick="${esc(p.key)}" ${on ? 'checked' : ''} aria-label="Use this for ${esc(p.album)}"><div class="mp-t"><h3>${esc(p.album)}</h3><div class="sub">${esc(facts)}${p.current ? ` · files say “${esc(p.current)}”` : ''}</div></div><span class="lvl ${p.level}">${LEVEL_WORD[p.level]}</span></div>
-    <details data-add-open="${esc(p.key)}" ${addOpen.has(p.key) ? 'open' : ''}><summary>${plural(p.songs.length, 'song changes', 'songs change')}</summary><div class="mp-songs">${p.songs.map(s => `<div class="mp-song"><b>${esc(s.title)}</b><span>${Object.entries(s.set).map(([k, v]) => `${META_FIELD[k]} ${esc(String(s.before[k] || '—'))} → <i>${esc(String(v))}</i>`).join(' · ')}</span></div>`).join('')}</div></details></div>`;
+function addSave() {  // the choices stay with the review, so a reload or another window finds them
+  clearTimeout(addSaveTimer);
+  if (demo || !addReview) return;
+  addSaveTimer = setTimeout(() => api('/api/add-choices', { path: addReview.path, choices: { songs: addChoice, covers: addCovers } }, { quiet: true }).catch(() => {}), 400);
+}
+const addMatches = s => [...(addReview?.matches?.[s.path] ?? []), ...(addChoice[s.path]?.found ?? [])];  // what the lookup found, and what was found by searching again
+const addFileValues = s => ({ ...Object.fromEntries([...ADD_TEXT, ...ADD_NUM].map(k => [k, s[k] ?? (ADD_NUM.includes(k) ? 0 : '')])), compilation: !!s.compilation });
+const addPicked = s => addMatches(s).find(c => c.id === addChoice[s.path]?.pick) ?? null;
+function addBase(s) {  // the file's values, with the candidate taken laid over them; an edit goes on top of this
+  const v = addFileValues(s), c = addPicked(s);
+  if (c) {
+    for (const k of ['title', 'artist', 'album', 'albumartist', 'year', 'track', 'tracks']) if (c[k]) v[k] = c[k];
+    if (c.discs > 1) { v.disc = c.disc; v.discs = c.discs; } else if (c.album !== s.album) { v.disc = 0; v.discs = 0; }
+  }
+  return v;
+}
+const addValues = s => ({ ...addBase(s), ...(addChoice[s.path]?.edit ?? {}) });
+const addOwner = v => v.albumartist || v.artist || '';
+const addKey = v => `${addOwner(v)} | ${v.album}`;
+function addChanges(s) {  // what differs from the file: that is what goes in the manifest
+  const v = addValues(s), f = addFileValues(s);
+  return Object.fromEntries(Object.entries(v).filter(([k, x]) => x !== f[k]));
+}
+const addOnIpod = v => v.album ? state.library?.albums.find(a => fold(a.album) === fold(v.album) && fold(a.artist) === fold(addOwner(v))) ?? null : null;
+function addGroups() {  // by the album each song will be in, in folder order
+  const groups = new Map();
+  for (const s of addReview?.songs ?? []) {
+    const v = addValues(s), key = addKey(v);
+    if (!groups.has(key)) groups.set(key, { key, values: v, songs: [] });
+    groups.get(key).songs.push(s);
+  }
+  for (const g of groups.values()) g.songs.sort((x, y) => (addValues(x).disc - addValues(y).disc) || (addValues(x).track - addValues(y).track));
+  return [...groups.values()];
+}
+function addCoverOf(g) {  // what the album will look like: {kind, image}
+  const chosen = addCovers[g.key], art = g.songs.map(s => s.art).find(Boolean);
+  if (chosen?.kind === 'image') return { kind: 'image', image: chosen.image };
+  if (chosen?.kind === 'none') return { kind: 'none', image: null };
+  return { kind: 'file', image: art ? `/add-art/${art}` : null };
+}
+function addReleaseCovers(g) {  // the covers of the releases MusicBrainz gave these songs, the ones taken first
+  const seen = new Set(), hits = [];
+  for (const c of [...g.songs.map(addPicked), ...g.songs.flatMap(addMatches)]) {
+    if (!c?.cover || seen.has(c.release)) continue;
+    seen.add(c.release); hits.push({ title: c.album, artist: c.albumartist, source: 'musicbrainz', image: c.coverLarge, thumb: c.cover });
+  }
+  return hits;
+}
+function addSongRow(s) {
+  const ch = addChoice[s.path] ?? {}, v = addValues(s), changes = addChanges(s), skipped = !!ch.skip, matches = addMatches(s);
+  const picks = `<select data-add-pick="${esc(s.path)}" aria-label="What to use for ${esc(s.title)}" ${skipped ? 'disabled' : ''}>
+      <option value="file" ${!addPicked(s) ? 'selected' : ''}>Keep the file’s tags</option>
+      ${matches.map(c => `<option value="${c.id}" ${ch.pick === c.id ? 'selected' : ''}>${esc(c.title)} · ${esc(c.album)}${c.year ? ` (${c.year})` : ''}${c.track ? ` · #${c.track}` : ''} · ${LEVEL_WORD[c.level]}</option>`).join('')}
+    </select>`;
+  const diff = Object.entries(changes).map(([k, x]) => `<span class="ar-ch">${ADD_LABEL[k]} <s>${esc(String(addFileValues(s)[k] || '—'))}</s> → <i>${esc(k === 'compilation' ? (x ? 'yes' : 'no') : String(x || '—'))}</i></span>`).join('');
+  const picked = addPicked(s), note = s.problem ? `<span class="ar-warn">${esc(s.problem)}</span>` : s.convert ? `<span class="ar-note">Becomes ${esc(s.convert)}</span>` : '';
+  return `<div class="ar-song${skipped ? ' skipped' : ''}"><input type="checkbox" data-add-sel="${esc(s.path)}" ${addSel.has(s.path) ? 'checked' : ''} aria-label="Pick ${esc(s.title)}">
+      <span class="num">${v.track || ''}</span>
+      <div class="ar-main"><div class="ar-t"><b>${esc(v.title || 'Untitled')}</b><span>${esc(v.artist || 'No artist')}${s.seconds ? ` · ${fmtTime(Math.round(s.seconds))}` : ''}</span>${picked ? `<span class="lvl ${picked.level}">${LEVEL_WORD[picked.level]}</span>` : ''}</div>
+        <div class="ar-pick">${matches.length ? picks : `<span class="ar-note">MusicBrainz found nothing. Edit to search with other words.</span>`}</div>
+        ${diff && !skipped ? `<div class="ar-diff">${diff}</div>` : ''}${note ? `<div>${note}</div>` : ''}<div class="ar-file" title="${esc(s.path)}">${esc(s.path.split('/').pop())}</div></div>
+      <div class="ar-act"><button class="act" data-add-edit="${esc(s.path)}" title="Edit and search" aria-label="Edit ${esc(s.title)}" ${skipped ? 'disabled' : ''}>${icon('edit')}</button>
+        <button class="btn small" data-add-skip="${esc(s.path)}">${skipped ? 'Put back' : 'Leave out'}</button></div></div>`;
+}
+function addGroupCard(g) {
+  const v = g.values, onIpod = addOnIpod(v), cover = addCoverOf(g), live = g.songs.filter(s => !addChoice[s.path]?.skip).length;
+  const facts = [addOwner(v) || 'No album artist', v.year || '', plural(g.songs.length, 'song', 'songs')].filter(Boolean).join(' · ');
+  const where = !v.album ? 'No album: the songs go in on their own' : onIpod ? 'Joins this album on the iPod' : 'A new album';
+  const sugg = !onIpod && v.album && cover.kind !== 'image' && !cover.image ? addReleaseCovers(g).slice(0, 4) : [];
+  const seen = new Set(), twice = [...new Set(g.songs.filter(s => !addChoice[s.path]?.skip).map(addValues).filter(x => x.track)
+    .map(x => `${x.disc || 1}:${x.track}`).filter(k => seen.has(k) || !seen.add(k)))].map(k => k.split(':')[1]);  // only among these songs: the iPod's own are not checked
+  const face = cover.image ? `<img src="${esc(cover.image)}" alt="">` : icon('albums');
+  return `<div class="mp ar-group${live ? '' : ' skipped'}"><div class="mp-head">
+      ${onIpod || !v.album ? `<span class="thumb ar-cover">${onIpod?.art ? `<img src="${esc(onIpod.art)}" alt="">` : face}</span>`
+        : `<button class="thumb ar-cover" data-add-cover="${esc(g.key)}" title="Choose the cover" aria-label="Choose the cover of ${esc(v.album)}">${face}<span class="thumb-edit">${icon('frames')}</span></button>`}
+      <div class="mp-t"><h3>${esc(v.album || 'No album')}</h3><div class="sub">${esc(facts)}${v.compilation ? ' · compilation' : ''}</div>
+        <div class="sub ar-where">${esc(where)}${onIpod ? ' · it keeps its cover' : !v.album ? '' : cover.kind === 'none' ? ' · no cover' : cover.kind === 'image' ? ' · the cover you chose' : cover.image ? ' · the cover the files have' : ' · no cover yet'}</div></div>
+      <div class="mp-act">${v.album && !onIpod && cover.kind !== 'none' && (cover.image) ? `<button class="btn small" data-add-nocover="${esc(g.key)}">No cover</button>` : ''}
+        ${addCovers[g.key] && g.songs.some(s => s.art) && cover.kind !== 'file' ? `<button class="btn small" data-add-filecover="${esc(g.key)}">Files’ cover</button>` : ''}
+        <button class="btn small" data-add-album="${esc(g.key)}">Album…</button></div></div>
+    ${sugg.length ? `<div class="ar-sugg"><span class="sub">Covers MusicBrainz has:</span>${sugg.map(h => `<button class="ar-thumb" data-add-usecover="${esc(g.key)}" data-url="${esc(h.image)}" title="Use the cover of ${esc(h.title)}"><img src="${esc(h.thumb)}" alt="${esc(h.title)}" onerror="this.closest('button').remove()"></button>`).join('')}</div>` : ''}
+    ${twice.length ? `<div class="ar-warn ar-twice">${twice.length === 1 ? `Two songs are track ${twice[0]}` : `Two songs share each of tracks ${twice.join(', ')}`}: the iPod plays them one after the other, in no set order.</div>` : ''}
+    <div class="ar-songs">${g.songs.map(addSongRow).join('')}</div></div>`;
 }
 function viewAdd() {
-  const shown = addReady() ? addReview : null, songs = shown?.songs.length ?? 0;
+  const shown = addReady() ? addReview : null, songs = shown?.songs ?? [];
+  const left = songs.filter(s => addChoice[s.path]?.skip).length, changed = songs.filter(s => !addChoice[s.path]?.skip && Object.keys(addChanges(s)).length).length;
   return `<p class="page-note">A preview shows what would be added and changes nothing. A backup is made before anything is written.</p>
     <div class="source"><input id="path" type="text" placeholder="/Users/you/Music/New songs" value="${esc(addPath)}" aria-label="Folder or file to add" spellcheck="false">
       <button class="btn" data-choose="folder">Choose folder…</button><button class="btn" data-choose="file">Choose file…</button></div>
-    <label class="tick add-tick"><input type="checkbox" id="addLookup" ${addLookup ? 'checked' : ''}><span>Look them up on MusicBrainz first<small>Slower: about three seconds an album. Off, songs go in as their files are tagged.</small></span></label>
-    ${!shown ? '' : shown.proposals.length ? `<h2 class="gp-title">What MusicBrainz found</h2><div class="mps">${shown.proposals.map(addCard).join('')}</div>`
-      : `<div class="empty"><h2>Nothing better found</h2>${plural(songs, 'song goes', 'songs go')} in as tagged.</div>`}`;
+    <label class="tick add-tick"><input type="checkbox" id="addLookup" ${addLookup ? 'checked' : ''}><span>Look them up on MusicBrainz first<small>Slower: about two seconds a song. Then you choose, song by song, what goes in. Off, songs go in as their files are tagged.</small></span></label>
+    ${!shown ? '' : !songs.length ? `<div class="empty"><h2>No songs found</h2>Choose another folder.</div>`
+      : `<div class="ar-bar"><span class="sub">${plural(songs.length, 'song', 'songs')} · ${changed} with new values${left ? ` · ${left} left out` : ''}</span><span class="spacer"></span>
+          <button class="btn small" data-add-bulk="all">${addSel.size === songs.length ? 'Pick none' : 'Pick all'}</button>
+          <button class="btn small" data-add-bulk="assign" ${addSel.size ? '' : 'disabled'}>Assign to album…</button>
+          <button class="btn small" data-add-bulk="strong">Use strong matches</button><button class="btn small" data-add-bulk="file">Keep all as tagged</button>
+          <button class="btn small" data-add-bulk="again" ${state.job.running ? 'disabled' : ''}>Look up again</button></div>
+        <div class="mps">${addGroups().map(addGroupCard).join('')}</div>`}`;
 }
+const addSong = path => addReview?.songs.find(s => s.path === path);
+const addNum = x => { const n = parseInt(String(x).trim(), 10); return Number.isFinite(n) && n >= 0 ? Math.min(n, 9999) : 0; };
+async function addEditSong(path) {
+  const s = addSong(path); if (!s) return;
+  const v = addValues(s), sg = suggest(), hits = [];
+  const f = await askForm({ title: 'Edit song', ok: 'Use these', message: `${s.path.split('/').pop()}. Change what you like, or search MusicBrainz with these values and pick a result to fill them in.`,
+    lookup: {
+      search: async x => {
+        const body = { title: x.title, artist: x.artist, album: x.album, albumartist: x.albumartist, year: addNum(x.year), track: addNum(x.track), tracks: addNum(x.tracks), seconds: s.seconds || 0 };
+        const r = demo ? [] : await fetch('/api/add-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async res => { const d = await res.json().catch(() => ({})); if (!res.ok) throw new Error(d.error || res.statusText); return d.results; });
+        hits.splice(0, hits.length, ...r); return r;
+      },
+      line: c => [c.title, [c.artist, c.album, c.year || '', c.track ? `track ${c.track}${c.tracks ? ` of ${c.tracks}` : ''}` : '', c.note, LEVEL_WORD[c.level]].filter(Boolean).join(' · ')],
+      fill: c => {  // a result becomes one of this song's choices (on Use these), so its cover is offered for the album too
+        hits.picked = c;
+        return { title: c.title, artist: c.artist, album: c.album, albumartist: c.albumartist, year: c.year ? String(c.year) : '', track: c.track ? String(c.track) : '', tracks: c.tracks ? String(c.tracks) : '', disc: c.disc ? String(c.disc) : '', discs: c.discs ? String(c.discs) : '' };
+      } },
+    fields: [{ name: 'title', label: 'Song name', value: v.title }, { name: 'artist', label: 'Artist', value: v.artist, list: sg.people },
+      { name: 'album', label: 'Album', value: v.album, list: sg.albums }, { name: 'albumartist', label: 'Album artist', value: v.albumartist, list: sg.people },
+      { name: 'track', label: 'Track', value: v.track ? String(v.track) : '', half: true }, { name: 'tracks', label: 'Of tracks', value: v.tracks ? String(v.tracks) : '', half: true },
+      { name: 'disc', label: 'Disc', value: v.disc ? String(v.disc) : '', half: true }, { name: 'discs', label: 'Of discs', value: v.discs ? String(v.discs) : '', half: true },
+      { name: 'year', label: 'Year', value: v.year ? String(v.year) : '', half: true }, { name: 'genre', label: 'Genre', value: v.genre, list: sg.genres, half: true },
+      { name: 'compilation', label: 'Compilation (songs by various artists)', tick: true, value: v.compilation }],
+    check: x => x.title ? null : ['title', 'A song needs a name.'] });
+  if (!f) return;
+  const ch = addChoice[path] ??= { pick: 'file', edit: {} };
+  if (hits.picked) {
+    if (!addMatches(s).some(m => m.id === hits.picked.id)) ch.found = [...(ch.found ?? []), hits.picked];
+    ch.pick = hits.picked.id;
+  }
+  const base = addBase(s), wanted = { ...Object.fromEntries(ADD_TEXT.map(k => [k, f[k] ?? ''])), ...Object.fromEntries(ADD_NUM.map(k => [k, addNum(f[k])])), compilation: !!f.compilation };
+  ch.edit = Object.fromEntries(Object.entries(wanted).filter(([k, x]) => x !== base[k]));
+  addSave(); render();
+}
+/* Songs into one album: one on the iPod (they take its album artist, so the iPod shows one album) or a new one. */
+async function addAssign(paths) {
+  const songs = paths.map(addSong).filter(Boolean); if (!songs.length) return;
+  const vals = songs.map(addValues), sg = suggest(), many = plural(songs.length, 'song', 'songs');
+  const common = f => new Set(vals.map(v => v[f])).size === 1 ? vals[0][f] : '';
+  const f = await askForm({ title: `Put ${many} in an album`, ok: 'Assign', lookup: LOOKUP.album,
+    message: 'Pick an album on the iPod to join it, or type a new name. Every song gets this album and album artist, so the iPod shows them as one album. Tick Compilation for songs by various artists.',
+    fields: [{ name: 'album', label: 'Album', value: common('album'), list: sg.albums },
+      { name: 'albumartist', label: 'Album artist', value: common('albumartist'), placeholder: 'Taken from the album if it is on the iPod', list: sg.people },
+      { name: 'compilation', label: 'Compilation (songs by various artists)', tick: true, value: vals.every(v => v.compilation) }],
+    check: x => x.album ? null : ['album', 'Give an album name.'] });
+  if (!f) return;
+  const L = state.library, matches = L.albums.filter(a => fold(a.album) === fold(f.album));
+  let there = matches.find(a => f.albumartist && fold(a.artist) === fold(f.albumartist)) ?? (!f.albumartist ? matches[0] : null);
+  if (!there && matches.length) {  // the name is on the iPod under someone else: one album or two is the user's call, never a guess
+    const other = matches[0], answer = await ask({ title: `Join “${other.album}”?`, ok: 'Join it', also: 'Make a new album',
+      message: `“${other.album}” is already on the iPod, under ${other.artist || 'no album artist'}. Join it, and the songs are filed under ${other.artist || 'no album artist'} too, as one album. Or make a new album of the same name under ${f.albumartist}.` });
+    if (!answer) return;
+    if (answer === true) there = other;
+  }
+  const mates = there ? L.songs.filter(x => fold(x.album) === fold(there.album) && fold(x.albumArtist) === fold(there.artist)) : [];
+  const artists = new Set(vals.map(v => v.artist).filter(Boolean));
+  const owner = there ? there.artist : f.albumartist || (f.compilation ? 'Various Artists' : artists.size === 1 ? [...artists][0] : '');
+  if (!owner) return notify('Give an album artist', 'These songs have different artists, so the album needs one album artist to be filed under, or tick Compilation.');
+  const compilation = there ? mates.some(x => x.compilation) || !!f.compilation : !!f.compilation;
+  const album = there ? there.album : f.album;
+  // A song that changes album leaves its old place behind: after the songs already on the iPod, or 1 to n in a new album. One that stays where it is keeps its number.
+  let next = there ? Math.max(0, ...mates.map(x => x.track || 0)) : 0;
+  const year = there ? mates.find(x => x.year)?.year ?? 0 : 0;
+  for (const s of songs) {
+    const ch = addChoice[s.path] ??= { pick: 'file', edit: {} }, base = addBase(s), now = addValues(s);
+    const edit = { ...ch.edit, album, albumartist: owner, compilation };
+    if (fold(now.album) !== fold(album)) Object.assign(edit, { track: ++next, tracks: there ? 0 : songs.length, disc: 0, discs: 0 });
+    if (year) edit.year = year;
+    ch.edit = Object.fromEntries(Object.entries(edit).filter(([k, x]) => x !== base[k]));
+  }
+  addSel.clear(); addSave(); render();
+  toast(there ? `${many} join “${album}”, which is on the iPod.` : `${many} go into a new album, “${album}”.`);
+}
+async function addPickCover(key) {
+  const g = addGroups().find(x => x.key === key); if (!g) return;
+  const memo = { hits: addReleaseCovers(g), note: 'The covers of the releases MusicBrainz found for these songs. Search for more, or use a file.' };
+  for (;;) {
+    const v = await pickCover({ title: 'Choose the cover', message: `For “${g.values.album}”, a new album. It is written with the songs.`, album: g.values.album, artist: addOwner(g.values), ok: 'Use this' }, memo);
+    if (!v) return;
+    if (await addUseCover(key, v)) return;
+  }
+}
+async function addUseCover(key, v) {
+  toast('Getting the image…', true);
+  try {
+    const r = demo ? { name: 'demo', image: '/assets/apple-touch-icon.png' } : await api('/api/add-cover-prepare', /^https?:\/\//.test(v) ? { url: v } : { path: v });
+    addCovers[key] = { kind: 'image', name: r.name, image: r.image }; addSave(); render(); return true;
+  } catch (e) { return false; } finally { toast(''); }
+}
+function addPayload() {  // one entry per song that is not as tagged: its new values, its album's cover, or that it stays out
+  const covers = new Map(addGroups().map(g => [g.key, g]));
+  return addReview.songs.flatMap(s => {
+    const ch = addChoice[s.path] ?? {};
+    if (ch.skip) return [{ path: s.path, skip: true }];
+    const v = addValues(s), set = addChanges(s), g = covers.get(addKey(v)), chosen = addCovers[addKey(v)];
+    const entry = { path: s.path, ...(Object.keys(set).length ? { set } : {}) };
+    if (g && v.album && !addOnIpod(v) && chosen) entry.cover = chosen.kind === 'none' ? '' : chosen.kind === 'image' ? chosen.name : null;
+    if (entry.cover === null) delete entry.cover;
+    return Object.keys(entry).length > 1 ? [entry] : [];
+  });
+}
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest('[data-add-edit], [data-add-skip], [data-add-cover], [data-add-nocover], [data-add-filecover], [data-add-usecover], [data-add-album], [data-add-bulk]');
+  if (!b || route !== 'add' || !addReview) return;
+  const d = b.dataset;
+  if (d.addEdit) return addEditSong(d.addEdit);
+  if (d.addSkip) { const ch = addChoice[d.addSkip] ??= { pick: 'file', edit: {} }; ch.skip = !ch.skip; addSave(); return render(); }
+  if (d.addCover) return addPickCover(d.addCover);
+  if (d.addNocover) { addCovers[d.addNocover] = { kind: 'none' }; addSave(); return render(); }
+  if (d.addFilecover) { delete addCovers[d.addFilecover]; addSave(); return render(); }
+  if (d.addUsecover) return addUseCover(d.addUsecover, d.url);
+  if (d.addAlbum) return addAssign(addGroups().find(g => g.key === d.addAlbum)?.songs.map(s => s.path) ?? []);
+  if (d.addBulk === 'all') { if (addSel.size === addReview.songs.length) addSel.clear(); else addReview.songs.forEach(s => addSel.add(s.path)); return render(); }
+  if (d.addBulk === 'assign') return addAssign([...addSel]);
+  if (d.addBulk === 'again') {
+    const edited = addReview.songs.some(x => addChoice[x.path]?.skip || Object.keys(addChoice[x.path]?.edit ?? {}).length) || Object.keys(addCovers).length;
+    if (edited && !await ask({ title: 'Look these songs up again?', message: 'What you chose and typed for them is cleared, and MusicBrainz is asked again. Nothing on the iPod changes.', ok: 'Look up again' })) return;
+    return job('/api/add-lookup', { path: addReview.path });
+  }
+  for (const s of addReview.songs) {  // strong: the best candidate where it is a strong match; file: every song as tagged. Edits go, a song left out stays out.
+    const ch = addChoice[s.path] ??= { pick: 'file', edit: {} }, best = addMatches(s)[0];
+    if (d.addBulk === 'file') { ch.pick = 'file'; ch.edit = {}; }
+    if (d.addBulk === 'strong' && best?.level === 'high') { ch.pick = best.id; ch.edit = {}; }
+  }
+  addSave(); render();
+});
 
 /* --------------------------------------------------------------- grouping */
 /* The iPod files a song under album and album artist. These change both together, so that the album it lands in is one album there too. */
@@ -1889,12 +2106,14 @@ async function refresh() {
     lost = true; renderFrame(); renderActivity(); setTimeout(refresh, 2000); return;
   }
   lost = false; reading = false;
+  if (!before.library && state.library && !addReview && !demo)  // a review left open comes back, with what was chosen in it
+    loadAddReview().then(() => { if (addReview && !addPath) { addPath = addReview.path; if (route === 'add') render(); } });
   const unchanged = before.stamp === state.stamp && !!before.library;  // the library this page already has: what is on screen stays as it is
   if (unchanged) state.library = before.library;
   if (state.job.running && !wasRunning) { dismissed = false; detailsOpen = false; }
   if (!state.job.running && wasRunning && /preview/.test(state.job.kind)) detailsOpen = true;  // a preview is read, not skimmed
   if (!state.job.running && wasRunning) { backupList = null; metaState = null; healthData = null; }  // a write or a backup added one
-  if (!state.job.running && wasRunning && state.job.kind === 'add' && state.job.ok) { addPath = ''; addReview = null; addPicks.clear(); }  // done: leaving it one click from adding it all twice
+  if (!state.job.running && wasRunning && state.job.kind === 'add' && state.job.ok) { addPath = ''; addReview = null; addChoice = {}; addCovers = {}; addSel.clear(); }  // done: leaving it one click from adding it all twice
   if (!state.job.running && wasRunning && state.job.kind === 'addscan') loadAddReview();
   if (!state.job.running && wasRunning && state.job.ok && !/preview/.test(state.job.kind)) picked.clear();
   wasRunning = state.job.running;
@@ -2226,11 +2445,12 @@ $('q').addEventListener('input', e => { query = e.target.value; clearTimeout(sea
 document.addEventListener('input', e => { if (e.target.id === 'path') { addPath = e.target.value; renderFrame(); } });
 document.addEventListener('change', e => {
   if (e.target.id === 'addLookup') { addLookup = e.target.checked; try { localStorage.setItem('addLookup', addLookup ? 'on' : 'off'); } catch (err) {} prefChanged(); return renderFrame(); }
+  const sel = e.target.dataset?.addSel;
+  if (sel !== undefined) { if (e.target.checked) addSel.add(sel); else addSel.delete(sel); return render(); }
   const key = e.target.dataset?.addPick; if (key === undefined) return;
-  if (e.target.checked) addPicks.add(key); else addPicks.delete(key);
-  render();
+  addChoice[key] = { ...(addChoice[key] ?? {}), pick: e.target.value, edit: {} };  // `found` stays: a result searched for is still a choice  // another candidate: what was typed over the last one goes with it
+  addSave(); render();
 });
-document.addEventListener('toggle', e => { const key = e.target.dataset?.addOpen; if (key !== undefined) { if (e.target.open) addOpen.add(key); else addOpen.delete(key); } }, true);
 $('eject').onclick = async () => {
   if (demo) return toast('Demo mode: the iPod would be ejected.');
   stopPlaying(); const b = $('eject'); b.disabled = true; b.innerHTML = '<span class="spin"></span>';
@@ -2323,9 +2543,12 @@ document.addEventListener('click', async ev => {
       const path = $('path').value.trim();
       if (!path) return notify('Choose something to add', 'Choose a folder or a file first.');
       if (b.id === 'addGo' && addLookup && !addReady()) return job('/api/add-lookup', { path });
-      const named = addReady() ? addPicks.size : 0;
-      if (b.id === 'addGo' && !await ask({ title: 'Add these songs to the iPod?', message: `${path}\n\n${named ? `They go in, and then ${plural(named, 'album takes', 'albums take')} the names you chose. ` : ''}Music must be closed. A backup of the library is made first.${demo ? `\n\n${DEMO_NOTE}` : ''}`, ok: 'Add songs' })) return;
-      return job(b.id === 'addGo' ? '/api/add' : '/api/add-preview', { path, confirm: b.id === 'addGo', ...(named ? { accepted: [...addPicks] } : {}) });
+      const reviewed = addReady() ? addReview.songs : null, songs = reviewed ? addPayload() : null;
+      const out = reviewed ? reviewed.filter(s => addChoice[s.path]?.skip).length : 0, going = reviewed ? reviewed.length - out : 0;
+      if (reviewed && !going) return notify('Every song is left out', 'Put back at least one song to add.');
+      const said = reviewed ? `${plural(going, 'song goes', 'songs go')} in${out ? `, ${out} left out` : ''}, each with the values and cover you chose. ` : '';
+      if (b.id === 'addGo' && !await ask({ title: 'Add these songs to the iPod?', message: `${path}\n\n${said}Music must be closed. A backup of the library is made first.${demo ? `\n\n${DEMO_NOTE}` : ''}`, ok: 'Add songs' })) return;
+      return job(b.id === 'addGo' ? '/api/add' : '/api/add-preview', { path, confirm: b.id === 'addGo', ...(songs ? { songs } : {}) });
     }
   }
 });

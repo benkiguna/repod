@@ -100,7 +100,7 @@ def positional(args: list) -> list:
         if skip:
             skip = False
         elif a.startswith("--"):
-            skip = a in ("--volume", "--note", "--out", "--export", "--id")
+            skip = a in ("--volume", "--note", "--out", "--export", "--id", "--manifest", "--art-dir")
         else:
             found.append(a)
     return found
@@ -438,26 +438,68 @@ def info(args):
 
 
 def add(args):
-    check_device()
-    library = read()
     source = Path(positional(args)[0])
     files = [f for f in ([source] if source.is_file() else sorted(source.rglob("*"))) if f.suffix.lower() in (".mp3", ".m4a", ".wav", ".aif", ".flac")]
+    if "--json" in args:  # what the files say; no iPod needed, as in the real one
+        art = flag(args, "--art-dir")
+        listed = []
+        for file in files:
+            title, artist, album, track = tags_of(file)
+            entry = {"path": str(file), "title": title, "artist": artist, "albumartist": artist if album else "", "album": album, "genre": "", "composer": "",
+                     "year": 0, "track": track, "tracks": 0, "disc": 0, "discs": 0, "compilation": False, "seconds": 200.0,
+                     "format": "FLAC 44.1 kHz" if file.suffix.lower() == ".flac" else "MP3 192 kbps", "cover": "none"}
+            if file.suffix.lower() == ".flac":
+                entry["convert"] = "Apple Lossless 16-bit 44.1 kHz"
+            cover = file.parent / "cover.png"
+            if cover.exists():
+                entry.update(cover="folder", art=str(cover))
+            elif art and "art" in file.stem.lower():  # a file named so carries a picture in its tags
+                Path(art).mkdir(parents=True, exist_ok=True)
+                (Path(art) / "1.png").write_bytes(png(file.stem))
+                entry.update(cover="tags", art=str(Path(art) / "1.png"))
+            listed.append(entry)
+        print(json.dumps({"files": listed, "problems": []}))
+        return
+    check_device()
+    library = read()
     if not files:
         raise Refused("no audio files found")
-    print(f"Files found: {len(files)}")
-    tagged = [tags_of(file) for file in files]
-    for title, artist, album, track in tagged:
-        print(f"    {f'{track:02} ' if track else '   '}{title}\n      {artist or '?'} / {album or '?'}  MP3 192 kbps  1 MB")
-    report("Invariants", [("tracks", f"{len(library['tracks'])} -> {len(library['tracks']) + len(files)}")])
+    tagged = [dict(zip(("title", "artist", "album", "track"), tags_of(file)), path=str(file)) for file in files]
+    for entry in tagged:
+        entry["albumartist"] = entry["artist"] if entry["album"] else ""
+    manifest = flag(args, "--manifest")
+    if manifest:
+        choices = {c["path"]: c for c in json.loads(Path(manifest).read_text())["files"]}
+        kept = []
+        for entry in tagged:
+            choice = choices.get(entry["path"], {})
+            if choice.get("skip"):
+                print(f"  SKIPPED: {entry['title']}: left out when reviewed")
+                continue
+            if choice.get("cover") and not Path(choice["cover"]).is_file():
+                raise Refused(f"the cover {choice['cover']} is not there")
+            entry.update({k: v for k, v in (choice.get("set") or {}).items() if not (k == "title" and not v)})
+            kept.append(entry)
+        tagged = kept
+        if not tagged:
+            raise Refused("every file was left out")
+    print(f"Files found: {len(tagged)}")
+    for entry in tagged:
+        track = entry["track"]
+        print(f"    {f'{track:02} ' if track else '   '}{entry['title']}\n      {entry['artist'] or '?'} / {entry['album'] or '?'}  MP3 192 kbps  1 MB")
+    report("Invariants", [("tracks", f"{len(library['tracks'])} -> {len(library['tracks']) + len(tagged)}")])
     if "--apply" not in args:
         print("\n  That was a preview. To write: add --apply")
         return
     print(f"\nWriting to: iPod classic at {MOUNT}")
     top = max([t["uniqueID"] for t in library["tracks"]] or [100])
-    for offset, (title, artist, album, track) in enumerate(tagged, 1):
-        library["tracks"].append(song(top + offset, title, artist, album, artist if album else "", track, 0, 200, ""))
-    write(library, "ipodctl add", [t[0] for t in tagged])
-    print(f"  Added tracks: {len(files)}")
+    for offset, entry in enumerate(tagged, 1):
+        added = song(top + offset, entry["title"], entry["artist"], entry["album"], entry["albumartist"], entry["track"], entry.get("year", 0), 200, entry.get("genre", ""),
+                     entry.get("compilation", False))
+        added.update(totalTracks=entry.get("tracks", 0), discNumber=entry.get("disc", 0), totalDiscs=entry.get("discs", 0))
+        library["tracks"].append(added)
+    write(library, "ipodctl add", [t["title"] for t in tagged])
+    print(f"  Added tracks: {len(tagged)}")
 
 
 def backup(args):
@@ -605,7 +647,7 @@ def main() -> None:
     if name != "init" and "--developer" in sys.argv:
         print("DEVELOPER MODE: writing outside the confirmed models (iPod classic) - a backup comes first")
     try:
-        COMMANDS[name](sys.argv[2:])
+        COMMANDS[name]([a for a in sys.argv[2:] if a != "--keep-backups"])  # the real one's retention switch: this one keeps every backup
     except Refused as error:
         print(f"error: {error}", file=sys.stderr)
         sys.exit(1)

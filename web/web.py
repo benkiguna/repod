@@ -50,7 +50,9 @@ NEEDS_IPOD = {"/api/preview", "/api/write", "/api/add-preview", "/api/add", "/ap
               "/api/songs-remove", "/api/copy-songs", "/api/eject"}
 KEPT = enrich.HOME / "kept-both.json"
 STARRED = enrich.HOME / "starred-backups.json"
-ADD_REVIEW = enrich.HOME / "add-review.json"  # what MusicBrainz said about songs not yet on the iPod
+ADD_REVIEW = enrich.HOME / "add-review.json"  # what MusicBrainz said about songs not yet on the iPod, and what was chosen for each
+ADD_ART = enrich.HOME / "add-art"  # the covers the files to add already have, as the page shows them
+ADD_COVERS = enrich.HOME / "add-covers"  # covers picked for albums being added, until they are written
 SONG_COPY = enrich.HOME / "song-copy.json"  # where the last copy of the songs is; the copy describes itself in its own RESTORE file
 RESTORE_FILE = "restore.json"
 HEALTH = enrich.HOME / "health.json"  # the last check of the iPod
@@ -317,6 +319,14 @@ def load_copy():
         return None
 
 
+def paired_backup():
+    """The backup that belongs with the song copy. Kept on this Mac as well as in the copy, so it is known with the copy's drive unplugged."""
+    try:
+        return (load_copy() or {}).get("backup") or json.loads(SONG_COPY.read_text()).get("backup")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def copy_summary():
     copy = load_copy()
     return copy and {"folder": str(copy["folder"]), "made": copy["made"], "backup": copy.get("backup"), "complete": copy.get("complete", False),
@@ -378,18 +388,6 @@ def load_health() -> dict:
         return json.loads(HEALTH.read_text())
     except (OSError, ValueError):
         return {}
-
-
-def read_drafts(lines: list) -> list:
-    """The songs `ipodctl add` would add, from its preview: what their files say. Ids below zero: they have none yet."""
-    songs = []
-    for head, tags in zip(lines, lines[1:]):
-        name, found = re.match(r"^  [ !] (?:(\d{2,}) |   )(.*)$", head), re.match(r"^      (.*?) / (.*?)  \S", tags)
-        if name and found:
-            artist, album = (("" if x == "?" else x) for x in found.groups())
-            songs.append({"id": -1 - len(songs), "title": name[2], "artist": artist, "album": album, "albumartist": artist if album else "",
-                          "track": int(name[1] or 0), "tracks": 0, "disc": 0, "discs": 0, "year": 0, "seconds": 0})
-    return songs
 
 
 def format_of(track: dict) -> str:
@@ -465,6 +463,7 @@ class App:
             command += ["--volume", self.options.volume]
         if self.options.developer:
             command.append("--developer")
+        command.append("--keep-backups")  # which backups go is the page's rule alone (backups): ipodctl's own would take starred ones
         return command
 
     def load(self) -> None:
@@ -723,7 +722,7 @@ class App:
                 found.append({"id": m[1], "files": int(m[2]), "size": m[3], "note": m[4] or ""})
         if found and not STARRED.exists():  # the oldest is the library from before any of this: it stays until you say otherwise
             save_starred({found[-1]["id"]})
-        starred, paired = load_starred(), (load_copy() or {}).get("backup")
+        starred, paired = load_starred(), paired_backup()
         for position, backup in enumerate(found):
             backup["starred"] = backup["id"] in starred
             backup["paired"] = backup["id"] == paired  # the songs in the copy are the ones this library lists, so the two stay together
@@ -783,7 +782,7 @@ class App:
                 part.write_text(json.dumps(record))
                 part.replace(target / RESTORE_FILE)
                 enrich.HOME.mkdir(parents=True, exist_ok=True)
-                SONG_COPY.write_text(json.dumps({"folder": str(target)}))
+                SONG_COPY.write_text(json.dumps({"folder": str(target), "backup": backup or paired_backup()}))  # unfinished, the last pairing still stands
 
             def unfinished():  # what is in the folder so far, so a stop or a crash only costs what was not yet copied
                 describe(False, entries=entries + [known[k] for k in sorted(known.keys() - {e["path"] for e in entries})])
@@ -985,62 +984,114 @@ class App:
                             (lambda: (meta.consume(), self.try_load())) if write else None)
 
     def add_lookup(self, path: str):
-        """MusicBrainz on songs still in a folder: nothing is written, and the page shows what it found."""
+        """MusicBrainz on songs still in a folder: nothing is written, and the page shows what it found for each song."""
         def work(log):
-            run = subprocess.run(self.ctl("add", path), capture_output=True, text=True)
+            shutil.rmtree(ADD_ART, ignore_errors=True)
+            shutil.rmtree(ADD_COVERS, ignore_errors=True)
+            ADD_ART.mkdir(parents=True)
+            run = subprocess.run(self.ctl("add", path, "--json", "--art-dir", str(ADD_ART / "tags")), capture_output=True, text=True)
             if run.returncode != 0:
                 raise enrich.ScanError(last_line(run))
-            songs = read_drafts(run.stdout.splitlines())
+            listing = json.loads(run.stdout)
+            songs = [added_song(f) for f in listing["files"]]
             log(f"Files found: {len(songs)}")
-            review = meta.proposals(songs, log, self.job.cancel.is_set)
+            for problem in listing.get("problems") or []:
+                log(f"  - SKIPPED {problem}")
+            matches = meta.look_up_songs(songs, log, self.job.cancel.is_set)
             enrich.HOME.mkdir(parents=True, exist_ok=True)
-            ADD_REVIEW.write_text(json.dumps({"path": path, "songs": songs, "proposals": review}))
-            log(f"Stopped. Found {len(review)} so far." if self.job.cancel.is_set() else f"Done. {len(review)} proposals. Nothing was changed.")
+            ADD_REVIEW.write_text(json.dumps({"version": 2, "path": path, "songs": songs, "matches": matches, "choices": {}}))
+            found = sum(1 for m in matches.values() if m)
+            log(f"Stopped. Looked up {len(matches)} of {len(songs)} songs." if self.job.cancel.is_set() else f"Done. Found {found} of {len(songs)} songs. Nothing was changed.")
             return True
         return self.job.start("addscan", work)
 
-    def add_named(self, path: str, accepted: list):
-        """Adds the songs, and at once gives them the names that were accepted. `add` takes a file's own tags, so that is two steps."""
-        review = json.loads(ADD_REVIEW.read_text())
-        decided = {key: {"status": "accepted", "fields": list(meta.GROUPS)} for key in accepted}
-        wanted, drafts = meta.manifest(review["proposals"], decided)["songs"], {s["id"]: s for s in review["songs"]}
-        before = {s["id"] for s in (self.library or {}).get("songs", [])}
+    def prepare_add_cover(self, path: str, url: str) -> str:
+        """An image picked for an album that is being added, kept beside the others picked in this review."""
+        if url:
+            source = enrich.download_image(url)
+            if not source:
+                raise enrich.ScanError("no JPEG or PNG image at that address")
+        else:
+            source = Path(path).expanduser()
+            if not source.is_file() or source.suffix.lower() not in IMAGE_KINDS:
+                raise enrich.ScanError(f"{source} is not an image file")
+        ADD_COVERS.mkdir(parents=True, exist_ok=True)
+        name = hashlib.sha1(source.read_bytes()).hexdigest()[:16]
+        if source.suffix.lower() in enrich.NEEDS_PNG or source.suffix.lower() not in IMAGE_KINDS:
+            enrich.to_png(source, ADD_COVERS / f"{name}.png")
+            return f"{name}.png"
+        shutil.copyfile(source, ADD_COVERS / (name + source.suffix.lower()))
+        return name + source.suffix.lower()
 
-        def work(log):
-            if not self.stream(["add", path, "--apply"], log):
-                return False
-            out = enrich.HOME / "added.json"
-            run = subprocess.run(self.ctl("dump", "--out", str(out)), capture_output=True, text=True)
-            if run.returncode != 0:
-                log("WARNING: the songs were added, but keep the names in their files.")
-                return True
-            pool = {}
-            for track in json.loads(out.read_text())["tracks"]:
-                if track.get("uniqueID") not in before:
-                    pool.setdefault(((track.get("title") or "").casefold(), (track.get("album") or "").casefold()), []).append(track["uniqueID"])
-            songs = []
-            for entry in wanted:
-                draft = drafts[entry["id"]]
-                found = pool.get((draft["title"].casefold(), draft["album"].casefold()))
-                if found:
-                    songs.append({"id": found.pop(0), "set": entry["set"]})
-                else:
-                    log(f"  - SKIPPED {draft['title']}: not found after adding")
-            if songs:
-                manifest = enrich.HOME / "add-manifest.json"
-                manifest.write_text(json.dumps({"version": 1, "songs": songs}))
-                if not self.stream(["retag", str(manifest), "--apply"], log):
-                    log("WARNING: the songs were added, but keep the names in their files.")
-            return True
-
+    def add_songs(self, path: str, write: bool, choices: list | None = None):
+        """`ipodctl add`, with the choices made in the review as its manifest: each song's values and its album's cover go in with it, in one write."""
+        args = ["add", path]
+        if choices:
+            manifest = enrich.HOME / "add-manifest.json"
+            manifest.write_text(json.dumps({"version": 1, "files": choices}, indent=1))
+            args += ["--manifest", str(manifest)]
         def then():
-            ADD_REVIEW.unlink(missing_ok=True)
-            self.try_load()
-        return self.job.start("add", work, then)
+            if write:
+                ADD_REVIEW.unlink(missing_ok=True)
+                self.try_load()
+        return self.run_ctl("add" if write else "add-preview", args + (["--apply"] if write else []), then if write else None)
 
-    def add_songs(self, path: str, write: bool):
-        return self.run_ctl("add" if write else "add-preview", ["add", path] + (["--apply"] if write else []),
-                            self.try_load if write else None)
+
+def added_song(listed: dict) -> dict:
+    """A song from `ipodctl add --json`, as the review keeps it. Its cover is copied where the page can be shown it, under a name of its own."""
+    song = {k: listed.get(k) or (0 if k in ("year", "track", "tracks", "disc", "discs", "seconds") else "") for k in
+            ("path", "title", "artist", "albumartist", "album", "genre", "year", "track", "tracks", "disc", "discs", "seconds", "format", "convert", "problem")}
+    song.update({k: listed[k] for k in ("isrc", "mbRecording", "mbRelease") if listed.get(k)})
+    song["compilation"] = bool(listed.get("compilation"))
+    song["art"] = None
+    art = Path(listed["art"]) if listed.get("art") else None
+    if art and art.is_file():
+        data = art.read_bytes()
+        name = hashlib.sha1(data).hexdigest()[:16] + (art.suffix.lower() if art.suffix.lower() in IMAGE_KINDS else ".jpg")
+        if not (ADD_ART / name).exists():
+            if art.suffix.lower() in enrich.NEEDS_PNG:
+                name = name.rsplit(".", 1)[0] + ".png"
+                enrich.to_png(art, ADD_ART / name)
+            else:
+                (ADD_ART / name).write_bytes(data)
+        song["art"] = name
+    return song
+
+
+TEXT_FIELDS = {"title", "artist", "albumartist", "album", "genre", "composer"}
+NUMBER_FIELDS = {"year", "track", "tracks", "disc", "discs"}
+
+
+def add_choices(review: dict, given) -> list | str:
+    """The page's choices for the songs being added, checked against the review: only its own files, known fields, and covers it prepared.
+    The manifest `ipodctl add --manifest` reads, or what is wrong with them."""
+    if not isinstance(given, list) or len(given) > 5000:
+        return "songs must be a list"
+    known, files = {s["path"] for s in review.get("songs", [])}, []
+    for entry in given:
+        if not isinstance(entry, dict) or entry.get("path") not in known:
+            return "a song that is not in this review"
+        values = entry.get("set") or {}
+        if not (isinstance(values, dict) and set(values) <= TEXT_FIELDS | NUMBER_FIELDS | {"compilation"}
+                and all(isinstance(v, str) and len(v) <= 500 for k, v in values.items() if k in TEXT_FIELDS)
+                and all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 9999 for k, v in values.items() if k in NUMBER_FIELDS)
+                and isinstance(values.get("compilation", False), bool)):
+            return "unknown fields or values"
+        choice = {"path": entry["path"]}
+        if entry.get("skip") is True:
+            choice["skip"] = True
+        if values:
+            choice["set"] = values
+        cover = entry.get("cover")
+        if cover == "":
+            choice["cover"] = ""
+        elif cover is not None:
+            file = ADD_COVERS / Path(str(cover)).name
+            if not file.is_file():
+                return "a cover that was not prepared"
+            choice["cover"] = str(file)
+        files.append(choice)
+    return files
 
 
 def choose(kind: str, prompt: str = "", images: bool = False):
@@ -1174,7 +1225,13 @@ def make_handler(app: App, port: int):
             if path == "/api/health":
                 return self._json(load_health())
             if path == "/api/add-review":
-                return self._json(json.loads(ADD_REVIEW.read_text()) if ADD_REVIEW.exists() else {})
+                review = json.loads(ADD_REVIEW.read_text()) if ADD_REVIEW.exists() else {}
+                return self._json(review if review.get("version") == 2 else {})  # an older review has no songs of its own: look them up again
+            if path.startswith(("/add-art/", "/add-cover/")):
+                folder, name = (ADD_ART, path[9:]) if path.startswith("/add-art/") else (ADD_COVERS, path[11:])
+                file = folder / Path(name).name
+                if file.is_file() and file.suffix in IMAGE_KINDS:
+                    return self._send(200, file.read_bytes(), IMAGE_KINDS[file.suffix], cache=True)
             if path == "/api/backups":
                 return self._json({"backups": app.backups(), "folder": str(BACKUPS), "keep": KEEP_BACKUPS})
             if path.startswith("/audio/") and path[7:].isdigit():
@@ -1252,15 +1309,49 @@ def make_handler(app: App, port: int):
                     return self._json({"error": f"{song_path} does not exist"}, 400)
                 if path == "/api/add" and body.get("confirm") is not True:
                     return self._json({"error": "add needs confirm: true"}, 400)
-                accepted = body.get("accepted")
-                if accepted and not (ADD_REVIEW.exists() and json.loads(ADD_REVIEW.read_text())["path"] == str(song_path)):
-                    return self._json({"error": "Look these songs up again: that answer was for another folder."}, 400)
-                started = app.add_named(str(song_path), accepted) if path == "/api/add" and accepted else app.add_songs(str(song_path), path == "/api/add")
+                choices = None
+                if body.get("songs") is not None:
+                    review = json.loads(ADD_REVIEW.read_text()) if ADD_REVIEW.exists() else {}
+                    if review.get("version") != 2 or review.get("path") != str(song_path):
+                        return self._json({"error": "Look these songs up again: that answer was for another folder."}, 400)
+                    choices = add_choices(review, body["songs"])
+                    if isinstance(choices, str):
+                        return self._json({"error": choices}, 400)
+                    if body["songs"] and all(c.get("skip") for c in choices) and len(choices) == len(review["songs"]):
+                        return self._json({"error": "Every song is left out, so there is nothing to add."}, 400)
+                started = app.add_songs(str(song_path), path == "/api/add", choices)
             elif path == "/api/add-lookup":
                 song_path = Path(str(body.get("path", "")).strip()).expanduser()
                 if not song_path.exists():
                     return self._json({"error": f"{song_path} does not exist"}, 400)
                 started = app.add_lookup(str(song_path))
+            elif path == "/api/add-choices":
+                if not ADD_REVIEW.exists() or not isinstance(body.get("choices"), dict) or len(json.dumps(body["choices"])) > 2_000_000:
+                    return self._json({"error": "no review to keep choices for"}, 400)
+                review = json.loads(ADD_REVIEW.read_text())
+                if review.get("version") != 2 or review.get("path") != str(body.get("path")):
+                    return self._json({"error": "Look these songs up again: that answer was for another folder."}, 400)
+                review["choices"] = body["choices"]
+                ADD_REVIEW.write_text(json.dumps(review))
+                return self._json({"ok": True})
+            elif path == "/api/add-search":
+                song = {k: str(body.get(k) or "").strip()[:200] for k in ("title", "artist", "album", "albumartist")}
+                song.update({k: body[k] if isinstance(body.get(k), (int, float)) and not isinstance(body.get(k), bool) and 0 <= body[k] <= 99999 else 0
+                             for k in ("year", "track", "tracks", "seconds")})
+                if not song["title"] and not song["album"]:
+                    return self._json({"error": "Give a song name or an album to search for."}, 400)
+                try:
+                    return self._json({"results": meta.search_song(song)})
+                except enrich.LOOKUP_FAILED as error:  # offline, or MusicBrainz is busy: the form says so and carries on
+                    return self._json({"error": f"MusicBrainz could not be reached ({type(error).__name__})"}, 502)
+            elif path == "/api/add-cover-prepare":
+                url, file = str(body.get("url") or "").strip(), str(body.get("path") or "").strip()
+                if url and not re.match(r"^https?://", url):
+                    return self._json({"error": "give a web address or an image file"}, 400)
+                try:
+                    return self._json({"name": (name := app.prepare_add_cover(file, url)), "image": f"/add-cover/{name}"})
+                except (enrich.ScanError, OSError, *enrich.LOOKUP_FAILED) as error:
+                    return self._json({"error": f"That image can't be used: {error}"}, 400)
             elif path == "/api/backup-star":
                 backup_id = body.get("id")
                 if not isinstance(backup_id, str) or not BACKUP_ID.match(backup_id):

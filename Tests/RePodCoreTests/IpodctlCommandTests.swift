@@ -54,6 +54,30 @@ struct IpodctlCommandTests {
         #expect(tracks.contains { $0.album == "Loveless" })
     }
 
+    @Test("add: choices made before adding reach the database in the same write, and a file left out stays out")
+    func addWithChoices() async throws {
+        let rig = try await WriteTests.rig(WriteTests.Fixture(hiRes: 14)); defer { rig.cleanUp() }
+        let folder = rig.root.appendingPathComponent("New songs", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let kept = folder.appendingPathComponent("01 Track.wav"), left = folder.appendingPathComponent("02 Track.wav")
+        for file in [kept, left] { try WriteTests.wave(bitDepth: 16, sampleRate: 44_100).write(to: file) }
+        let choices = rig.root.appendingPathComponent("choices.json")
+        try Data("""
+        {"version": 1, "files": [
+          {"path": "\(kept.path)", "set": {"title": "When You Sleep", "artist": "My Bloody Valentine", "albumartist": "My Bloody Valentine",
+                                            "album": "Loveless", "year": 1991, "track": 4, "tracks": 11}},
+          {"path": "\(left.path)", "skip": true}]}
+        """.utf8).write(to: choices)
+        let before = try rig.onDisk().tracks.count
+
+        try await AddCommand.run(call("add", folder.path, "--manifest", choices.path, "--apply", on: rig))
+
+        let tracks = try rig.onDisk().tracks
+        #expect(tracks.count == before + 1)
+        let added = try #require(tracks.first { $0.title == "When You Sleep" })
+        #expect((added.album, added.albumArtist, added.year, added.trackNumber, added.totalTracks) == ("Loveless", "My Bloody Valentine", 1991, 4, 11))
+    }
+
 
     @Test("apply: a cover with replace overwrites the old image; without it the album is left alone")
     func applyReplacesACover() async throws {

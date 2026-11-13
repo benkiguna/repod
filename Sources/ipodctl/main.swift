@@ -42,8 +42,11 @@ ipodctl - reads and writes an iPod's library. The web page runs it; it can be us
   audio [--fix ID[,ID] | --fix-all] (--keep-originals FOLDER | --discard-originals) [--apply]
                         file formats: what the iPod plays and what it does not; --fix transcodes
   fix-sort [--apply]    repairing sort fields that split albums into several covers
-  add FILE|FOLDER ... [--title T] [--artist A] [--album B] [--track N] [--apply]
-                        adding tracks to the library. Field overrides work only with a single file.
+  add FILE|FOLDER ... [--title T] [--artist A] [--album B] [--track N] [--manifest CHOICES.json] [--apply]
+                        adding tracks to the library. Field overrides work only with a single file;
+                        --manifest gives each file its own values, cover or none, or leaves it out
+  add FILE|FOLDER ... --json [--art-dir DIR]
+                        what the files say, as JSON, with covers from tags written to DIR; no iPod needed
   edit --id N,N (--set FIELD=VALUE)... [--apply]
                         text fields for chosen songs (title, artist, albumartist, album, genre, composer);
                         setting album and albumartist moves songs into another album
@@ -60,6 +63,7 @@ ipodctl - reads and writes an iPod's library. The web page runs it; it can be us
   Without --apply a command only previews. Every write checks that Music is closed, merges pending
   plays and saves a backup first.
   --allow-music         write even with Music running (changes to the tables will not survive)
+  --keep-backups        delete no backup after a write; without it, backups older than 7 days go, the newest 3 always stay
 """
 
 /// The command named by the first argument. An error the command did not

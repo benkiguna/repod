@@ -419,7 +419,8 @@ dialog[open] { animation: sheet-in var(--ease-in); }
 
 /* ---------------------------------------------- songs of an album: sheet and the back of a Cover Flow cover */
 dialog.wide { width: min(560px, calc(100vw - 32px)); }
-.sheet .form { display: grid; gap: var(--s3); margin-bottom: var(--s4); }
+.sheet .form { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s4); }
+.sheet .form > :not(.half) { grid-column: 1 / -1; }  /* two short fields share a row (`half`), everything else has one to itself */
 .sheet .form label { display: grid; gap: var(--s1); font-size: 12px; color: var(--label-2); }
 .sheet .form input { width: 100%; height: 32px; padding: 0 var(--s3); border: 0; border-radius: var(--r-pill); background: var(--fill); outline: none; color: var(--label); font: inherit; font-size: 14px; }
 .ah { display: flex; align-items: center; gap: var(--s4); margin-bottom: var(--s4); }
@@ -503,6 +504,33 @@ dialog.wide { width: min(560px, calc(100vw - 32px)); }
 .mp-song { display: flex; flex-direction: column; font-size: 12px; padding: 4px 0; border-top: .5px solid var(--separator); }
 .mp-song span { color: var(--label-2); } .mp-song i { color: var(--label); font-style: normal; }
 .mp-left { font-size: 12px; color: var(--label-2); margin-top: var(--s2); }
+/* Add songs: one card per album the songs will be in, one row per song (see `viewAdd`). */
+.ar-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s4); }
+.ar-group.skipped .ar-cover, .ar-group.skipped h3 { opacity: .5; }
+.ar-cover { width: 56px; height: 56px; border-radius: var(--r-art); box-shadow: var(--shadow-art); cursor: default; }
+.ar-where { margin-top: 2px; }
+.ar-sugg { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s3); }
+.ar-thumb { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 5px; overflow: hidden; background: var(--fill); cursor: default; }
+.ar-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ar-thumb:hover, .ar-thumb:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.ar-songs { display: flex; flex-direction: column; margin-top: var(--s3); }
+.ar-song { display: grid; grid-template-columns: auto 24px minmax(0, 1fr) auto; gap: var(--s2) var(--s3); align-items: start; padding: var(--s2) 0; border-top: .5px solid var(--separator); font-size: 13px; }
+.ar-song > input { margin-top: 3px; }
+.ar-song > .num { color: var(--label-2); text-align: right; padding-top: 1px; }
+.ar-song.skipped .ar-main { opacity: .45; }
+.ar-main { min-width: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.ar-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s2); min-width: 0; }
+.ar-t b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.ar-t span { color: var(--label-2); font-size: 12px; }
+.ar-pick select { width: 100%; max-width: 520px; height: 26px; border: 0; border-radius: var(--r-control); background: var(--fill); color: var(--label); font: inherit; font-size: 12px; padding: 0 var(--s2); }
+.ar-diff { display: flex; flex-wrap: wrap; gap: 2px var(--s3); font-size: 12px; color: var(--label-2); }
+.ar-ch s { color: var(--label-3); } .ar-ch i { color: var(--label); font-style: normal; }
+.ar-note, .ar-file { font-size: 11px; color: var(--label-3); }
+.ar-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ar-warn { font-size: 12px; color: var(--red); }
+.ar-twice { margin-top: var(--s2); color: var(--orange); }
+.ar-act { display: flex; align-items: center; gap: var(--s1); }
+@media (max-width: 640px) { .ar-song { grid-template-columns: auto minmax(0, 1fr); } .ar-song > .num { display: none; } .ar-act { grid-column: 2; } }
 
 /* the logo: the light variant sits on light pages, the dark variant on dark ones */
 :root { --lg-body: #16181D; --lg-screen: #F4F4F1; --lg-ink: #B4B8C1; --lg-hl: #2F6FEB; --lg-hlink: #FFFFFF; --lg-wheel: #F4F4F1; --lg-center: #16181D; --lg-dot: #9AA0AB; }
