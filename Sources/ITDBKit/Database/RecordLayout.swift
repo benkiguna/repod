@@ -33,7 +33,14 @@ public enum MhypLayout {
     public static let entryCount = HeaderField<UInt32>(0x10)
     /// 1 = the master playlist (the list of all tracks and the browse tables).
     public static let isMaster = HeaderField<UInt8>(0x14)
-    public static let persistentID = HeaderField<UInt64>(0x18)
+    /// When the playlist was made (Mac time). Measured on a Classic 7G: the On-The-Go lists made on the
+    /// iPod carry a time here and the playlist's own id right after it.
+    public static let created = HeaderField<UInt32>(0x18)
+    /// Until 2026-11 this was read at 0x18, which took the time and half of the id; nothing was wrong on
+    /// the iPod because the same bytes were written back, but a new playlist needs the true place.
+    public static let persistentID = HeaderField<UInt64>(0x1C)
+    /// When it last changed (Mac time); equal to `created` in a list nobody changed.
+    public static let modified = HeaderField<UInt32>(0x58)
 }
 
 /// `mhip` - a playlist item.
@@ -42,6 +49,12 @@ public enum MhipLayout {
     public static let order = HeaderField<UInt32>(0x14)
     /// The track's `uniqueID` (`mhit` 0x10).
     public static let trackID = HeaderField<UInt32>(0x18)
+    /// When the track went into the playlist (Mac time).
+    public static let added = HeaderField<UInt32>(0x1C)
+    /// The track's `persistentID` (`mhit` 0x70) - measured: every entry of the Classic 7G's lists carries it.
+    public static let trackPersistentID = HeaderField<UInt64>(0x2C)
+    /// The entry's own id, different in every entry, the same in both copies of a list.
+    public static let entryID = HeaderField<UInt64>(0x3C)
 }
 
 /// `mhia` - an album record.

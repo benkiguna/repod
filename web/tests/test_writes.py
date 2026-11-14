@@ -352,3 +352,55 @@ class SongQueries(unittest.TestCase):
         right = {"title": "Open Water", "artist": "Mira Vale", "albumartist": "Mira Vale", "album": "Tideline", "seconds": 300, "year": 1990}
         self.assertGreaterEqual(meta.candidate_score(bare, right), 0.95)
         self.assertLess(meta.candidate_score(self.song, right), meta.candidate_score(self.song, {**right, "seconds": 241, "year": 2017}))
+
+
+class Playlists(Case):
+    """The iPod's own playlists: made, filled, emptied, renamed and removed; the list of all songs and smart lists are not changed."""
+    def lists(self):
+        return {p["name"]: p for p in self.state()["library"]["playlists"]}
+
+    def edit(self, *changes):
+        return self.job("/api/playlist-edit", {"changes": list(changes), "confirm": True})
+
+    def test_the_page_is_given_the_playlists_but_not_the_list_of_all_songs(self):
+        lists = self.lists()
+        self.assertEqual(set(lists), {"On-The-Go 1", "Road trip", "Recently Played"})
+        self.assertTrue(lists["Recently Played"]["smart"])
+        self.assertEqual(len(lists["On-The-Go 1"]["songs"]), 3)
+
+    def test_a_new_playlist_with_songs_then_more_and_fewer(self):
+        ids = [s["id"] for s in self.state()["library"]["songs"][:4]]
+        self.assertEqual(self.edit({"create": "Evening", "add": ids[:2]})["outcome"]["summary"], "Made 1 change to playlists")
+        made = self.lists()["Evening"]
+        self.assertEqual(made["songs"], ids[:2])
+        self.edit({"playlist": made["id"], "add": [ids[1], ids[2]], "remove": [ids[0]], "rename": "Late"})
+        self.assertEqual(self.lists()["Late"]["songs"], [ids[1], ids[2]], "a song already in it is not added twice")
+        count = len(self.tracks())
+        self.edit({"playlist": made["id"], "delete": True})
+        self.assertNotIn("Late", self.lists())
+        self.assertEqual(len(self.tracks()), count, "the songs stay on the iPod")
+
+    def test_what_cannot_be_changed_by_hand_is_refused(self):
+        lists, song = self.lists(), self.state()["library"]["songs"][0]["id"]
+        for changes in ([{"playlist": lists["Recently Played"]["id"], "add": [song]}], [{"playlist": "ffffffffffffffff", "add": [song]}],
+                        [{"create": "X", "add": [999999]}], [{"create": " "}], [{"playlist": lists["Road trip"]["id"], "rename": ""}], []):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.post("/api/playlist-edit", {"changes": changes, "confirm": True})[0], 400)
+        self.assertEqual(self.post("/api/playlist-edit", {"changes": [{"create": "Y", "add": [song]}]})[0], 400, "a write needs confirm")
+
+    def test_songs_being_added_go_into_their_playlists_in_the_same_write(self):
+        folder = Path(tempfile.mkdtemp()) / "Fake Release"
+        folder.mkdir()
+        for name in ("01 Song 1.mp3", "02 Song 2.mp3"):
+            (folder / name).write_bytes(b"x")
+        road = self.lists()["Road trip"]["id"]
+        self.job("/api/add-lookup", {"path": str(folder)})
+        one, two = (s["path"] for s in self.get("/api/add-review")["songs"])
+        songs = [{"path": one, "playlists": [road, "new:Fresh"]}, {"path": two, "playlists": ["new:Fresh"]}]
+        self.assertEqual(self.job("/api/add", {"path": str(folder), "confirm": True, "songs": songs})["outcome"]["summary"], "Added 2 songs to the iPod")
+        lists, titles = self.lists(), {t["uniqueID"]: t["title"] for t in self.tracks()}
+        self.assertEqual([titles[i] for i in lists["Road trip"]["songs"]], ["Song 1"])
+        self.assertEqual([titles[i] for i in lists["Fresh"]["songs"]], ["Song 1", "Song 2"], "a new list is made once, for every song that names it")
+        bad = [{"path": one, "playlists": [self.lists()["Recently Played"]["id"]]}]
+        self.job("/api/add-lookup", {"path": str(folder)})
+        self.assertEqual(self.post("/api/add", {"path": str(folder), "confirm": True, "songs": bad})[0], 400, "not into a smart list")

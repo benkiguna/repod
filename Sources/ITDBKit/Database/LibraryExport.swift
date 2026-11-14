@@ -41,6 +41,8 @@ public enum LibraryExport {
     public struct Playlist: Codable, Sendable {
         public let name: String?
         public let isMaster: Bool
+        /// A list the iPod fills from rules.
+        public var isSmart: Bool = false
         public let persistentID: String
         public let entries: [PlaylistEntry]
     }
@@ -118,6 +120,7 @@ public enum LibraryExport {
                 Playlist(
                     name: playlist.name,
                     isMaster: playlist.isMaster,
+                    isSmart: playlist.isSmart,
                     persistentID: String(format: "%016llx", playlist.persistentID),
                     entries: playlist.entries.map { PlaylistEntry(trackID: $0.trackID, order: $0.order) }
                 )

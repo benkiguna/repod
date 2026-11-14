@@ -46,7 +46,7 @@ enum SyntheticLibrary {
         return header("mhip", 76, 76 + m.count, [0x0C: u32(1), 0x14: u32(UInt32(100 + i)), 0x18: u32(t.id)]) + m
     }
     let mhods = text(1, "iPod") + index + jump
-    let playlist = header("mhyp", 184, 184 + mhods.count + mhips.count, [0x0C: u32(3), 0x10: u32(7), 0x14: [1], 0x18: u64(0xABCD)]) + mhods + mhips
+    let playlist = header("mhyp", 184, 184 + mhods.count + mhips.count, [0x0C: u32(3), 0x10: u32(7), 0x14: [1], 0x1C: u64(0xABCD)]) + mhods + mhips
     let trackSection = header("mhsd", 96, 96 + 92 + mhits.count, [0x0C: u32(1)]) + header("mhlt", 92, 7, [:]) + mhits
     let s3 = header("mhsd", 96, 96 + 92 + playlist.count, [0x0C: u32(3)]) + header("mhlp", 92, 1, [:]) + playlist
     let s2 = header("mhsd", 96, 96 + 92 + playlist.count, [0x0C: u32(2)]) + header("mhlp", 92, 1, [:]) + playlist

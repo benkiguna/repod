@@ -62,6 +62,16 @@ struct AdditionManifestTests {
         #expect(throws: AdditionManifest.ManifestError.self) { try missing.applied(to: [Self.candidate("a.mp3")]) }
     }
 
+    @Test("playlists: an id or new:Name; anything else stops it all")
+    func playlists() throws {
+        let m = try Self.manifest(#"{"version": 1, "files": [{"path": "/tmp/a.mp3", "playlists": ["6d10bd68cd10bd68", "new:Road trip"]}]}"#)
+        let a = Self.candidate("a.mp3")
+        let out = try m.applied(to: [a])
+        #expect(out.playlists[a.id] == [.existing(0x6d10_bd68_cd10_bd68), .new("Road trip")])
+        let bad = try Self.manifest(#"{"version": 1, "files": [{"path": "/tmp/a.mp3", "playlists": ["Road trip"]}]}"#)
+        #expect(throws: AdditionManifest.ManifestError.self) { try bad.applied(to: [Self.candidate("a.mp3")]) }
+    }
+
     @Test("another version is refused, not half read")
     func version() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("repod-choices-\(UUID().uuidString.prefix(6)).json")

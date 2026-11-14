@@ -530,6 +530,24 @@ dialog.wide { width: min(560px, calc(100vw - 32px)); }
 .ar-warn { font-size: 12px; color: var(--red); }
 .ar-twice { margin-top: var(--s2); color: var(--orange); }
 .ar-act { display: flex; align-items: center; gap: var(--s1); }
+.ar-lists { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.ar-list { display: inline-flex; align-items: center; gap: var(--s1); height: 22px; padding: 0 2px 0 var(--s2); border-radius: var(--r-pill); background: var(--fill); font-size: 12px; }
+.ar-list .i { width: 12px; height: 12px; }
+.ar-list button { width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--label-2); font: inherit; line-height: 1; cursor: default; }
+.ar-list button:hover { background: var(--fill-hover); color: var(--label); }
+/* Playlists: the sheet that picks one, and the screen that lists them (see `viewPlaylists`). */
+.pl-pick { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; border-radius: var(--r-control); background: var(--fill); margin-bottom: var(--s3); }
+.pl-opt { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); padding: 8px 12px; border: 0; border-top: .5px solid var(--separator); background: none; color: inherit; font: inherit; text-align: left; cursor: default; }
+.pl-opt:first-child { border-top: 0; } .pl-opt:hover { background: var(--fill-hover); }
+.pl-opt b { font-weight: 500; } .pl-opt span { font-size: 12px; color: var(--label-2); }
+.pl-opt[aria-selected="true"] { background: var(--accent); color: #fff; } .pl-opt[aria-selected="true"] span { color: rgba(255, 255, 255, .8); }
+.pl-icon { width: 44px; height: 44px; border-radius: var(--r-art); }
+.pl-icon .i { width: 20px; height: 20px; }
+.pl-songs { margin-top: var(--s3); display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
+.pl-song { display: grid; grid-template-columns: auto 28px minmax(0, 1.2fr) minmax(0, 1fr) auto; gap: var(--s3); align-items: center; padding: 6px 0; border-top: .5px solid var(--separator); font-size: 13px; }
+.pl-song .t, .pl-song .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-song .num { color: var(--label-2); text-align: right; font-variant-numeric: tabular-nums; }
+.pl-bar { display: flex; justify-content: flex-end; padding-top: var(--s2); border-top: .5px solid var(--separator); }
 @media (max-width: 640px) { .ar-song { grid-template-columns: auto minmax(0, 1fr); } .ar-song > .num { display: none; } .ar-act { grid-column: 2; } }
 
 /* the logo: the light variant sits on light pages, the dark variant on dark ones */
@@ -736,7 +754,7 @@ td.pick input, th.pick input, .tile .pick { accent-color: var(--accent); }
 #deviceGlyph { position: absolute; left: calc(6 * var(--px)); display: grid; }
 #deviceGlyph .spin { width: calc(10 * var(--px)); height: calc(10 * var(--px)); border-radius: 50%; border: calc(1.5 * var(--px)) solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
 .screen nav { gap: 0; padding: 0; }
-.screen nav button { padding: 0 calc(8 * var(--px)); height: calc(28 * var(--px)); border-radius: 0; font-size: calc(13 * var(--px)); font-weight: 500; gap: calc(4 * var(--px)); color: var(--label); }
+.screen nav button { padding: 0 calc(8 * var(--px)); height: calc(24 * var(--px)); border-radius: 0; font-size: calc(13 * var(--px)); font-weight: 500; gap: calc(4 * var(--px)); color: var(--label); }
 .screen nav button svg { display: none; }
 .screen nav button:hover { background: var(--fill); }
 .screen nav button[aria-current=page] { background: none; color: var(--label); box-shadow: none; }

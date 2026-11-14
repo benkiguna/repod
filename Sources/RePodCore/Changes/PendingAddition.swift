@@ -20,6 +20,8 @@ public struct PendingAddition: Identifiable, Sendable {
     /// A place in a specific album (adding from the album view). Without it the track
     /// goes where its tags point.
     public var placement: AlbumPlacement?
+    /// Playlists the song goes into once it is on the iPod, in the same write.
+    public var playlists: [PlaylistTarget] = []
 
     public init(id: UUID, draft: TrackDraft, source: URL, verdict: AudioCompatibility.Verdict,
                 formatLabel: String, cover: AudioImport.CoverSource?) {
@@ -46,5 +48,31 @@ public struct PendingAddition: Identifiable, Sendable {
     public var isHopeless: Bool {
         if case .rejected = verdict { return true }
         return false
+    }
+}
+
+/// A playlist a song being added goes into: one on the iPod (its id as `dump` writes it), or a new one, made once
+/// for all the songs that name it. Written as "6d10bd68cd10bd68" or "new:Road trip".
+public enum PlaylistTarget: Sendable, Hashable, CustomStringConvertible {
+    case existing(UInt64)
+    case new(String)
+
+    public init?(_ text: String) {
+        if text.hasPrefix("new:") {
+            let name = String(text.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return nil }
+            self = .new(name)
+        } else if let id = UInt64(text, radix: 16) {
+            self = .existing(id)
+        } else {
+            return nil
+        }
+    }
+
+    public var description: String {
+        switch self {
+        case .existing(let id): String(format: "%016llx", id)
+        case .new(let name): "new:\(name)"
+        }
     }
 }

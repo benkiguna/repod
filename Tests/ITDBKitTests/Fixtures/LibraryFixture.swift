@@ -96,7 +96,7 @@ enum LibraryFixture {
             + jumpTable(criterion: 4, jump)
         let entries = tracks.enumerated().flatMap { mhip(order: UInt32(100 + $0.offset), trackID: $0.element.id) }
         return container("mhyp", length: 184, fields: [
-            0x0C: u32(3), 0x10: u32(UInt32(tracks.count)), 0x14: [1], 0x18: u64(0xABCD),
+            0x0C: u32(3), 0x10: u32(UInt32(tracks.count)), 0x14: [1], 0x1C: u64(0xABCD),
         ], children: mhods + entries)
     }
 

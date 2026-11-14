@@ -12,6 +12,7 @@ It reads and writes the iPod's own library directly on the device, so there is n
 - Group albums by hand on a board: drag songs, merge albums, number tracks, with undo, and nothing written until you review it
 - Find duplicate songs, and decide what to keep with a reason for each
 - Fix tags from MusicBrainz, and find covers online
+- Make playlists and fill them from any song list, and mark albums as compilations
 - Add songs, optionally looking each one up on MusicBrainz first and choosing, song by song, its values, its album (one on the iPod or a new one) and its album's cover
 - Check the iPod's health, and convert songs it can't play
 - Back up the library automatically before every write, and rebuild a whole iPod after a reset

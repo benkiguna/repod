@@ -41,9 +41,11 @@ enum AddCommand {
             if let t = call.value(for: "--title") { candidates[0].draft.title = t }
             if let n = call.value(for: "--track").flatMap({ UInt32($0) }) { candidates[0].draft.trackNumber = n }
         }
+        var playlists: [UUID: [PlaylistTarget]] = [:]
         if let path = call.value(for: "--manifest") {
             let manifest = try AdditionManifest.read(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
             let outcome = try manifest.applied(to: candidates)
+            playlists = outcome.playlists
             for title in outcome.skipped { print("  SKIPPED: \(title): left out when reviewed") }
             for path in outcome.unknown { print("  SKIPPED: \(path): not among the files to add") }
             candidates = outcome.candidates
@@ -67,6 +69,19 @@ enum AddCommand {
             print("\nTo transcode before adding: \(needConversion.count) (the originals stay where they are)")
         }
 
-        try await previewAndApply((playable + needConversion).map(PendingAddition.init), to: onDevice, note: "ipodctl add")
+        var lists: [PlaylistTarget: Int] = [:]
+        for targets in playlists.values { for target in targets { lists[target, default: 0] += 1 } }
+        for (target, count) in lists.sorted(by: { $0.key.description < $1.key.description }) {
+            let name: String = switch target {
+            case .new(let name): "a new playlist \u{201C}\(name)\u{201D}"
+            case .existing(let id): "\u{201C}\(onDevice.library.playlists.first { $0.persistentID == id }?.name ?? target.description)\u{201D}"
+            }
+            print("  Into \(name): \(count) \(count == 1 ? "song" : "songs")")
+        }
+        try await previewAndApply((playable + needConversion).map { candidate in
+            var addition = PendingAddition(candidate)
+            addition.playlists = playlists[candidate.id] ?? []
+            return addition
+        }, to: onDevice, note: "ipodctl add")
     }
 }

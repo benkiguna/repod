@@ -82,6 +82,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 
 /* Icons: 16 px grid, 1.5 px line (DESIGN.md) */
 const ICONS = {
+  playlist: '<path d="M2.5 4h8M2.5 7.5h8M2.5 11h5"/><path d="M12 9.5v4"/><path d="M10 11.5h4"/>',
   soundOn: '<path d="M2.5 6.2v3.6h2.3L8 12.5v-9L4.8 6.2z"/><path d="M10.3 5.8a3 3 0 0 1 0 4.4M12 4.2a5.3 5.3 0 0 1 0 7.6"/>',
   soundOff: '<path d="M2.5 6.2v3.6h2.3L8 12.5v-9L4.8 6.2z"/><path d="M10.5 6.3l3 3.4M13.5 6.3l-3 3.4"/>',
   tidy: '<rect x="2.5" y="3" width="4" height="10" rx="1.2"/><rect x="9.5" y="3" width="4" height="10" rx="1.2"/>',
@@ -378,6 +379,7 @@ const ROUTES = {
   albums: { title: 'Albums', icon: 'albums', group: 'navLibrary', search: true },
   artists: { title: 'Artists', icon: 'artists', group: 'navLibrary', search: true },
   songs: { title: 'Songs', icon: 'songs', group: 'navLibrary', search: true },
+  playlists: { title: 'Playlists', icon: 'playlist', group: 'navLibrary' },
   add: { title: 'Add songs', short: 'Add', icon: 'add', group: 'navManage' },
   grouping: { title: 'Grouping', short: 'Group', icon: 'stack', group: 'navManage', search: true },
   duplicates: { title: 'Duplicates', short: 'Copies', icon: 'copies', group: 'navManage' },
@@ -394,12 +396,13 @@ try { coverView = localStorage.getItem('coverView') === 'flow' ? 'flow' : 'grid'
 if (!ROUTES[route]) route = 'albums';
 let demo = false, menuOpen = false, dismissed = false, detailsOpen = false, wasRunning = false;
 const LIBRARY = ['albums', 'artists', 'songs'];
+const MENU = [...LIBRARY, 'playlists'];  // the iPod's own menu: the three lists of songs, and its playlists
 const offline = () => state.connected === false || !!state.ejected;  // the library on screen is the last one read, and nothing can reach the iPod
 const locked = () => state.job.running || offline();  // what a button that needs the iPod asks
 const picked = new Set();  // ticked song ids in Songs, album keys in Albums, names in Artists; only ever one screen's
 let lastPick = null;
 /* The click wheel. As on an iPod it has two levels: in the menu it moves the highlight; the centre goes in, and then it drives what is on screen. Menu comes back. */
-let wheelCursor = LIBRARY.includes(route) ? route : null, lastLibrary = wheelCursor || 'albums', wheelLevel = 'menu';  // no highlight while the page shows something the menu doesn't list
+let wheelCursor = MENU.includes(route) ? route : null, lastLibrary = wheelCursor || 'albums', wheelLevel = 'menu';  // no highlight while the page shows something the menu doesn't list
 
 /* Every call to the server goes through here, and every failure ends here: one sheet in plain words, and an error that says it has been shown (see `unhandledrejection`). `quiet` is for polling, which has its own way of saying so. */
 /* The pin. Pinned, the iPod and the rail stay where they are, and the page's preferences (the layout, the theme, the sounds, the views, sorts and column
@@ -465,10 +468,10 @@ function renderFrame() {
     const tail = k === 'covers' ? (missing ? `<span class="pip">${missing}</span>` : '')
       : k === 'grouping' ? (wrong ? `<span class="pip">${wrong}</span>` : '')
       : k === 'duplicates' ? (copies ? `<span class="pip">${copies}</span>` : '')
-      : r.search && L && LIBRARY.includes(k) ? `<span class="count">${L[k].length.toLocaleString()}</span>` : '';
-    return `<button data-route="${k}" aria-label="${r.title}" ${r.short || !LIBRARY.includes(k) ? `title="${r.title}"` : ''} class="${k === wheelCursor ? 'cursor' : ''}" ${route === k ? 'aria-current="page"' : ''}>${LIBRARY.includes(k) ? icon(r.icon) : `<span class="tile-icon">${icon(r.icon)}${tail}</span>`}<span class="label">${r.short || r.title}</span>${LIBRARY.includes(k) ? tail : ''}${LIBRARY.includes(k) ? '<span class="chev">›</span>' : ''}</button>`;
+      : L && MENU.includes(k) ? `<span class="count">${(L[k] ?? []).length.toLocaleString()}</span>` : '';
+    return `<button data-route="${k}" aria-label="${r.title}" ${r.short || !MENU.includes(k) ? `title="${r.title}"` : ''} class="${k === wheelCursor ? 'cursor' : ''}" ${route === k ? 'aria-current="page"' : ''}>${MENU.includes(k) ? icon(r.icon) : `<span class="tile-icon">${icon(r.icon)}${tail}</span>`}<span class="label">${r.short || r.title}</span>${MENU.includes(k) ? tail : ''}${MENU.includes(k) ? '<span class="chev">›</span>' : ''}</button>`;
   };
-  $('navLibrary').innerHTML = ['albums', 'artists', 'songs'].map(item).join('');
+  $('navLibrary').innerHTML = MENU.map(item).join('');
   $('navManage').innerHTML = ['add', 'grouping', 'duplicates', 'covers', 'metadata', 'backups'].map(item).join('');
   const busy = state.job.running;
   const shown = L && !offline(), writes = shown && state.writing?.allowed !== false && !state.readMode;
@@ -501,7 +504,7 @@ function renderFrame() {
   $('theme').innerHTML = `<button class="btn icon" data-theme-set="${themes[(theme + 1) % 3][0]}" title="Appearance: ${themes[theme][1]}" aria-label="Appearance: ${themes[theme][1]}">${icon(getTheme() === 'light' ? 'sun' : getTheme() === 'dark' ? 'moon' : 'auto')}</button>`;
   const r = ROUTES[route];
   $('title').textContent = r.title;
-  $('subtitle').textContent = L && LIBRARY.includes(route) ? plural(L[route].length, route.slice(0, -1), route) : '';
+  $('subtitle').textContent = L && MENU.includes(route) ? plural((L[route] ?? []).length, route.slice(0, -1), route) : '';
   if (L && route === 'grouping' && board.edits.size) $('subtitle').textContent = 'Not written yet';  // the count is on Review
   if (L && route === 'duplicates') { const going = dupGoing(), size = going.reduce((t, id) => t + songById(id).size, 0); $('subtitle').textContent = going.length ? `${plural(going.length, 'copy', 'copies')} to remove · ${bytes(size)} back` : plural(L.duplicates.sets.filter(x => !keptBoth().has(x.key)).length, 'song with copies', 'songs with copies'); }
   if (demo) $('subtitle').textContent = 'Demo · nothing is sent, written or deleted';
@@ -531,7 +534,7 @@ function renderFrame() {
   const off = locked() ? 'disabled' : '';
   const pickButtons = !selecting ? '' : `<button class="btn plain" id="clearPick">Clear</button>${route === 'artists'
     ? `<button class="btn" data-sel="play">Play</button>${picked.size > 1 ? `<button class="btn prominent" data-sel="edit" ${off}>Merge ${picked.size}…</button>` : `<button class="btn prominent" data-sel="edit" ${off}>Rename…</button>`}`
-    : `<button class="btn destructive" data-sel="delete" ${off}>Delete…</button><button class="btn" data-sel="edit" ${off}>Edit…</button><button class="btn" data-sel="play">Play</button><button class="btn prominent" data-sel="group" ${off}>Group…</button>`}`;
+    : `<button class="btn destructive" data-sel="delete" ${off}>Delete…</button><button class="btn" data-sel="edit" ${off}>Edit…</button><button class="btn" data-sel="play">Play</button><button class="btn" data-sel="playlist" ${off}>Playlist…</button><button class="btn prominent" data-sel="group" ${off}>Group…</button>`}`;
   const missing_ = route === 'artists' && L ? L.artists.filter(p => p.artist && !infoOf(p.artist)?.looked).length : 0, scanning = busy && state.job.kind === 'artistscan';
   const lookUp = selecting || !missing_ ? '' : `<button class="btn prominent" id="artistScan" ${busy ? 'disabled' : ''}>${scanning ? '<span class="spin"></span>Looking up…' : `Look up ${plural(missing_, 'artist', 'artists')}`}</button>`;
   const sortBtn = LIBRARY.includes(route) && L?.songs.length && !selecting ? `<button class="btn" id="sortBtn" aria-haspopup="menu">${SORTS[route][sortOf().by][0]} ${sortOf().dir < 0 ? '↑' : '↓'}</button>` : '';
@@ -619,7 +622,7 @@ function render() {
     if (kept.flowItems) { flowItems = kept.flowItems; flowIdx = Math.min(flowIdx ?? flowItems.length >> 1, flowItems.length - 1); kept.querySelector('.fi.flipped')?.classList.remove('flipped'); }
   } else {
     if (comboFor && $('main').contains(comboFor)) comboClose();  // its field is about to be drawn again
-    $('main').innerHTML = !state.library ? viewEmpty() : ({ albums: viewLibrary, artists: viewLibrary, songs: viewLibrary, add: viewAdd, grouping: viewGrouping, duplicates: viewDuplicates, covers: viewCovers, metadata: viewMeta, backups: viewBackups, health: viewHealth }[route])();
+    $('main').innerHTML = !state.library ? viewEmpty() : ({ albums: viewLibrary, artists: viewLibrary, songs: viewLibrary, add: viewAdd, grouping: viewGrouping, duplicates: viewDuplicates, covers: viewCovers, metadata: viewMeta, playlists: viewPlaylists, backups: viewBackups, health: viewHealth }[route])();
   }
   keepScreen();
   markPlaying();
@@ -980,7 +983,8 @@ function addSongRow(s) {
       <span class="num">${v.track || ''}</span>
       <div class="ar-main"><div class="ar-t"><b>${esc(v.title || 'Untitled')}</b><span>${esc(v.artist || 'No artist')}${s.seconds ? ` · ${fmtTime(Math.round(s.seconds))}` : ''}</span>${picked ? `<span class="lvl ${picked.level}">${LEVEL_WORD[picked.level]}</span>` : ''}</div>
         <div class="ar-pick">${matches.length ? picks : `<span class="ar-note">MusicBrainz found nothing. Edit to search with other words.</span>`}</div>
-        ${diff && !skipped ? `<div class="ar-diff">${diff}</div>` : ''}${note ? `<div>${note}</div>` : ''}<div class="ar-file" title="${esc(s.path)}">${esc(s.path.split('/').pop())}</div></div>
+        ${diff && !skipped ? `<div class="ar-diff">${diff}</div>` : ''}${note ? `<div>${note}</div>` : ''}
+        ${(ch.playlists ?? []).length && !skipped ? `<div class="ar-lists">${ch.playlists.map(t => `<span class="ar-list">${icon('playlist')}${esc(addListName(t))}<button data-add-unlist="${esc(s.path)}" data-list="${esc(t)}" title="Not into this playlist" aria-label="Not into ${esc(addListName(t))}">×</button></span>`).join('')}</div>` : ''}<div class="ar-file" title="${esc(s.path)}">${esc(s.path.split('/').pop())}</div></div>
       <div class="ar-act"><button class="act" data-add-edit="${esc(s.path)}" title="Edit and search" aria-label="Edit ${esc(s.title)}" ${skipped ? 'disabled' : ''}>${icon('edit')}</button>
         <button class="btn small" data-add-skip="${esc(s.path)}">${skipped ? 'Put back' : 'Leave out'}</button></div></div>`;
 }
@@ -1000,7 +1004,7 @@ function addGroupCard(g) {
       <div class="mp-act">${v.album && !onIpod && cover.kind !== 'none' && (cover.image) ? `<button class="btn small" data-add-nocover="${esc(g.key)}">No cover</button>` : ''}
         ${addCovers[g.key] && g.songs.some(s => s.art) && cover.kind !== 'file' ? `<button class="btn small" data-add-filecover="${esc(g.key)}">Files’ cover</button>` : ''}
         <button class="btn small" data-add-album="${esc(g.key)}">Album…</button></div></div>
-    ${sugg.length ? `<div class="ar-sugg"><span class="sub">Covers MusicBrainz has:</span>${sugg.map(h => `<button class="ar-thumb" data-add-usecover="${esc(g.key)}" data-url="${esc(h.image)}" title="Use the cover of ${esc(h.title)}"><img src="${esc(h.thumb)}" alt="${esc(h.title)}" onerror="this.closest('button').remove()"></button>`).join('')}</div>` : ''}
+    ${sugg.length ? `<div class="ar-sugg"><span class="sub">Covers MusicBrainz has:</span>${sugg.map(h => `<button class="ar-thumb" data-add-usecover="${esc(g.key)}" data-url="${esc(h.image)}" title="Use the cover of ${esc(h.title)}"><img src="${esc(h.thumb)}" alt="${esc(h.title)}" onerror="const row = this.closest('.ar-sugg'); this.closest('button').remove(); if (row && !row.querySelector('img')) row.remove()"></button>`).join('')}</div>` : ''}
     ${twice.length ? `<div class="ar-warn ar-twice">${twice.length === 1 ? `Two songs are track ${twice[0]}` : `Two songs share each of tracks ${twice.join(', ')}`}: the iPod plays them one after the other, in no set order.</div>` : ''}
     <div class="ar-songs">${g.songs.map(addSongRow).join('')}</div></div>`;
 }
@@ -1015,11 +1019,13 @@ function viewAdd() {
       : `<div class="ar-bar"><span class="sub">${plural(songs.length, 'song', 'songs')} · ${changed} with new values${left ? ` · ${left} left out` : ''}</span><span class="spacer"></span>
           <button class="btn small" data-add-bulk="all">${addSel.size === songs.length ? 'Pick none' : 'Pick all'}</button>
           <button class="btn small" data-add-bulk="assign" ${addSel.size ? '' : 'disabled'}>Assign to album…</button>
+          <button class="btn small" data-add-bulk="playlist" ${addSel.size ? '' : 'disabled'}>Playlist…</button>
           <button class="btn small" data-add-bulk="strong">Use strong matches</button><button class="btn small" data-add-bulk="file">Keep all as tagged</button>
           <button class="btn small" data-add-bulk="again" ${state.job.running ? 'disabled' : ''}>Look up again</button></div>
         <div class="mps">${addGroups().map(addGroupCard).join('')}</div>`}`;
 }
 const addSong = path => addReview?.songs.find(s => s.path === path);
+const addListName = t => t.startsWith('new:') ? `${t.slice(4)} (new)` : editableLists().find(l => l.id === t)?.name ?? 'a playlist';
 const addNum = x => { const n = parseInt(String(x).trim(), 10); return Number.isFinite(n) && n >= 0 ? Math.min(n, 9999) : 0; };
 async function addEditSong(path) {
   const s = addSong(path); if (!s) return;
@@ -1114,14 +1120,15 @@ function addPayload() {  // one entry per song that is not as tagged: its new va
     const ch = addChoice[s.path] ?? {};
     if (ch.skip) return [{ path: s.path, skip: true }];
     const v = addValues(s), set = addChanges(s), g = covers.get(addKey(v)), chosen = addCovers[addKey(v)];
-    const entry = { path: s.path, ...(Object.keys(set).length ? { set } : {}) };
+    const lists = (ch.playlists ?? []).filter(t => t.startsWith('new:') || editableLists().some(l => l.id === t));  // a list removed since is left out
+    const entry = { path: s.path, ...(Object.keys(set).length ? { set } : {}), ...(lists.length ? { playlists: lists } : {}) };
     if (g && v.album && !addOnIpod(v) && chosen) entry.cover = chosen.kind === 'none' ? '' : chosen.kind === 'image' ? chosen.name : null;
     if (entry.cover === null) delete entry.cover;
     return Object.keys(entry).length > 1 ? [entry] : [];
   });
 }
 document.addEventListener('click', async ev => {
-  const b = ev.target.closest('[data-add-edit], [data-add-skip], [data-add-cover], [data-add-nocover], [data-add-filecover], [data-add-usecover], [data-add-album], [data-add-bulk]');
+  const b = ev.target.closest('[data-add-edit], [data-add-skip], [data-add-cover], [data-add-nocover], [data-add-filecover], [data-add-usecover], [data-add-album], [data-add-bulk], [data-add-unlist]');
   if (!b || route !== 'add' || !addReview) return;
   const d = b.dataset;
   if (d.addEdit) return addEditSong(d.addEdit);
@@ -1133,6 +1140,15 @@ document.addEventListener('click', async ev => {
   if (d.addAlbum) return addAssign(addGroups().find(g => g.key === d.addAlbum)?.songs.map(s => s.path) ?? []);
   if (d.addBulk === 'all') { if (addSel.size === addReview.songs.length) addSel.clear(); else addReview.songs.forEach(s => addSel.add(s.path)); return render(); }
   if (d.addBulk === 'assign') return addAssign([...addSel]);
+  if (d.addUnlist) { const ch = addChoice[d.addUnlist]; if (ch) ch.playlists = (ch.playlists ?? []).filter(t => t !== d.list); addSave(); return render(); }
+  if (d.addBulk === 'playlist') {
+    const target = await pickPlaylist({ title: `Put ${plural(addSel.size, 'song', 'songs')} in a playlist`, ok: 'Choose',
+      message: 'They go into it as they are added, in the same write. A new playlist is made once, with every song you put in it.' });
+    if (!target) return;
+    const t = target.name ? `new:${target.name}` : target.id;
+    for (const path of addSel) { const ch = addChoice[path] ??= { pick: 'file', edit: {} }; ch.playlists = [...new Set([...(ch.playlists ?? []), t])]; }
+    addSel.clear(); addSave(); return render();
+  }
   if (d.addBulk === 'again') {
     const edited = addReview.songs.some(x => addChoice[x.path]?.skip || Object.keys(addChoice[x.path]?.edit ?? {}).length) || Object.keys(addCovers).length;
     if (edited && !await ask({ title: 'Look these songs up again?', message: 'What you chose and typed for them is cleared, and MusicBrainz is asked again. Nothing on the iPod changes.', ok: 'Look up again' })) return;
@@ -1144,6 +1160,105 @@ document.addEventListener('click', async ev => {
     if (d.addBulk === 'strong' && best?.level === 'high') { ch.pick = best.id; ch.edit = {}; }
   }
   addSave(); render();
+});
+
+/* -------------------------------------------------------------- playlists */
+/* The iPod's own playlists. Songs go in from anywhere a song can be picked (Songs, an album's songs, the add review); the Playlists screen
+   shows each list with its songs, which can be played, taken out, renamed or the whole list removed. The list of all songs and smart lists
+   (the iPod fills those from rules) are shown but not changed. Every change is one write, with a backup first. */
+const editableLists = () => (state.library?.playlists ?? []).filter(p => !p.smart);
+/* Which playlist: one of the iPod's, or a new one by name. Resolves to {id} or {name}, or null. */
+function pickPlaylist({ title, message, ok = 'Add' }) {
+  return new Promise(resolve => {
+    claimSheet(resolve);
+    sheet.classList.remove('wide');
+    const lists = editableLists();
+    $('sheetBody').innerHTML = `<h2>${esc(title)}</h2><p>${esc(message)}</p>
+      ${lists.length ? `<div class="pl-pick" role="listbox" aria-label="Playlists">${lists.map(l => `<button class="pl-opt" data-pl="${l.id}" role="option"><b>${esc(l.name)}</b><span>${plural(l.songs.length, 'song', 'songs')}</span></button>`).join('')}</div>` : ''}
+      <div class="form"><label><span>${lists.length ? 'Or a new playlist' : 'A new playlist'}</span><input type="text" name="newList" placeholder="Name" autocomplete="off"></label></div>
+      <div class="form-note" role="alert"></div>
+      <div class="buttons"><button class="btn" value="cancel">Cancel</button><button class="btn prominent" value="ok">${esc(ok)}</button></div>`;
+    const body = $('sheetBody'), done = v => { endSheet = null; sheet.close(); resolve(v); };
+    let chosen = null;
+    const submit = () => {
+      const name = body.querySelector('[name=newList]').value.trim();
+      if (name) return done({ name });
+      if (chosen) return done({ id: chosen });
+      body.querySelector('.form-note').textContent = lists.length ? 'Pick a playlist, or type a name for a new one.' : 'Give the new playlist a name.';
+    };
+    sheet.onclose = null; sheet.oncancel = e => { e.preventDefault(); done(null); };
+    body.onclick = e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.pl) { chosen = b.dataset.pl; body.querySelector('[name=newList]').value = ''; body.querySelectorAll('.pl-opt').forEach(x => x.setAttribute('aria-selected', x === b)); return; }
+      if (b.value === 'ok') return submit();
+      done(null);
+    };
+    body.querySelector('[name=newList]').oninput = () => { chosen = null; body.querySelectorAll('.pl-opt').forEach(x => x.setAttribute('aria-selected', 'false')); };
+    body.onkeydown = e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); submit(); } };
+    sheet.showModal(); (body.querySelector('.pl-opt') ?? body.querySelector('input')).focus();
+  });
+}
+async function addToPlaylist(songs) {
+  if (state.job.running) return notify('Wait a moment', 'Another job is still running.');
+  if (offline()) return notify('The iPod isn’t connected', 'Connect it and it will be read again. Nothing was changed.');
+  const many = plural(songs.length, 'song', 'songs'), note = demo ? `\n\n${DEMO_NOTE}` : '';
+  const target = await pickPlaylist({ title: `Add ${many} to a playlist`, message: `They go at the end of the list, in the order shown here; a song already in it is not added twice. The songs stay where they are on the iPod. A backup is saved first. Music must be closed.${note}` });
+  if (!target) return;
+  const ids = inOrder(songs).map(x => x.id);
+  albumSheet.close(); document.querySelector('.fi.flipped')?.classList.remove('flipped');
+  return job('/api/playlist-edit', { changes: [target.name ? { create: target.name, add: ids } : { playlist: target.id, add: ids }], confirm: true });
+}
+/* A compilation is an album of songs by various artists: the iPod files it under Compilations instead of under each artist. */
+async function markCompilation(songs) {
+  const on = !songs.every(x => x.compilation), many = plural(songs.length, 'song', 'songs'), note = demo ? `\n\n${DEMO_NOTE}` : '';
+  if (!await ask({ title: on ? `Mark ${many} as a compilation?` : `${many[0].toUpperCase()}${many.slice(1)}: not a compilation?`, ok: on ? 'Mark as compilation' : 'Not a compilation',
+    message: on ? `The iPod shows their albums as compilations (songs by various artists), under Compilations, not under each artist. A backup is saved first.${note}`
+      : `Their albums go back under their artists. A backup is saved first.${note}` })) return;
+  const payload = songs.filter(x => x.compilation !== on).map(x => ({ id: x.id, set: { compilation: on } }));
+  if (!payload.length) return;
+  return startEdit(payload);
+}
+let plOpen = new Set();
+function viewPlaylists() {
+  const L = state.library, lists = L.playlists ?? [], byId = new Map(L.songs.map(x => [x.id, x]));
+  if (!lists.length) return `<p class="page-note">Pick songs anywhere and choose Playlist… to make the first one.</p><div class="empty"><h2>No playlists</h2>This iPod has only the list of all its songs.</div>`;
+  return `<p class="page-note">The iPod’s own playlists. Add songs from Songs, an album, or while adding new songs. Every change is saved to the iPod with a backup first.</p>
+    <div class="mps">${lists.map(l => {
+      const songs = l.songs.map(id => byId.get(id)).filter(Boolean), open = plOpen.has(l.id), secs = songs.reduce((n, x) => n + x.seconds, 0);
+      return `<div class="mp pl-card" data-pl-card="${l.id}"><div class="mp-head"><span class="thumb pl-icon">${icon('playlist')}</span>
+          <div class="mp-t"><h3>${esc(l.name)}</h3><div class="sub">${plural(songs.length, 'song', 'songs')}${secs ? ` · ${fmtTime(secs)}` : ''}${l.smart ? ' · smart playlist: the iPod fills it' : ''}</div></div>
+          <div class="mp-act">${songs.length ? `<button class="btn small" data-pl-act="play" data-id="${l.id}">Play</button>` : ''}
+            ${l.smart ? '' : `<button class="btn small" data-pl-act="rename" data-id="${l.id}">Rename…</button><button class="btn small destructive" data-pl-act="delete" data-id="${l.id}">Remove…</button>`}
+            ${songs.length ? `<button class="btn small" data-pl-act="open" data-id="${l.id}" aria-expanded="${open}">${open ? 'Hide songs' : 'Songs'}</button>` : ''}</div></div>
+        ${open ? `<div class="pl-songs">${songs.map((x, i) => `<label class="pl-song"><input type="checkbox" data-pl-song="${x.id}" ${l.smart ? 'disabled' : ''}><span class="num">${i + 1}</span>
+            <span class="t">${esc(x.title || 'Untitled')}</span><span class="sub">${esc([x.artist, x.album].filter(Boolean).join(' · '))}</span><span class="num">${fmtTime(x.seconds)}</span></label>`).join('')}
+          ${l.smart ? '' : `<div class="pl-bar"><button class="btn small" data-pl-act="remove" data-id="${l.id}">Take picked out…</button></div>`}</div>` : ''}</div>`;
+    }).join('')}</div>`;
+}
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest('[data-pl-act]'); if (!b || route !== 'playlists') return;
+  const l = (state.library.playlists ?? []).find(x => x.id === b.dataset.id); if (!l) return;
+  const byId = new Map(state.library.songs.map(x => [x.id, x])), songs = l.songs.map(id => byId.get(id)).filter(Boolean), note = demo ? `\n\n${DEMO_NOTE}` : '';
+  const act = b.dataset.plAct;
+  if (act === 'open') { if (plOpen.has(l.id)) plOpen.delete(l.id); else plOpen.add(l.id); return render(); }
+  if (act === 'play') return playSongs(songs);
+  if (state.job.running) return notify('Wait a moment', 'Another job is still running.');
+  if (offline()) return notify('The iPod isn’t connected', 'Connect it and it will be read again. Nothing was changed.');
+  if (act === 'rename') {
+    const f = await askForm({ title: 'Rename the playlist', ok: 'Rename', fields: [{ name: 'name', label: 'Name', value: l.name }], check: v => v.name ? null : ['name', 'A playlist needs a name.'] });
+    if (!f || f.name === l.name) return;
+    return job('/api/playlist-edit', { changes: [{ playlist: l.id, rename: f.name }], confirm: true });
+  }
+  if (act === 'delete') {
+    if (!await ask({ title: `Remove “${l.name}”?`, message: `The playlist goes from the iPod. Its ${plural(songs.length, 'song stays', 'songs stay')} on the iPod. A backup is saved first.${note}`, ok: 'Remove playlist', destructive: true })) return;
+    return job('/api/playlist-edit', { changes: [{ playlist: l.id, delete: true }], confirm: true });
+  }
+  if (act === 'remove') {
+    const card = b.closest('[data-pl-card]'), ids = [...card.querySelectorAll('[data-pl-song]:checked')].map(c => +c.dataset.plSong);
+    if (!ids.length) return notify('Pick songs first', 'Tick the songs to take out of this playlist.');
+    if (!await ask({ title: `Take ${plural(ids.length, 'song', 'songs')} out of “${l.name}”?`, message: `They stay on the iPod and in any other playlist. A backup is saved first.${note}`, ok: 'Take out' })) return;
+    return job('/api/playlist-edit', { changes: [{ playlist: l.id, remove: ids }], confirm: true });
+  }
 });
 
 /* --------------------------------------------------------------- grouping */
@@ -2066,7 +2181,7 @@ function sized(img) {  // under 300 px looks soft on the iPod's 200 px now-playi
 
 /* --------------------------------------------------------------- activity */
 const WHAT = { lookup: 'Looking up covers', preview: 'Previewing the write', write: 'Writing covers to the iPod', add: 'Adding songs to the iPod', 'add-preview': 'Previewing the songs',
-  edit: 'Editing songs on the iPod', 'edit-preview': 'Previewing the edit', remove: 'Deleting songs from the iPod', 'remove-preview': 'Previewing the delete',
+  edit: 'Editing songs on the iPod', 'edit-preview': 'Previewing the edit', playlist: 'Changing playlists on the iPod', 'playlist-preview': 'Previewing the playlist change', remove: 'Deleting songs from the iPod', 'remove-preview': 'Previewing the delete',
   metascan: 'Scanning MusicBrainz', addscan: 'Looking up the new songs', health: 'Checking this iPod', convert: 'Converting songs', sortfix: 'Repairing the sort fields', 'backup-clean': 'Removing older backups', metapreview: 'Previewing the metadata', metawrite: 'Writing metadata to the iPod',
   artistscan: 'Looking up artists', cover: 'Writing the cover to the iPod', regroup: 'Putting albums back in order', 'regroup-preview': 'Previewing the albums to put back',
   backup: 'Backing up the library', verify: 'Checking the backup', restore: 'Restoring the backup', copy: 'Copying songs to this Mac', copycheck: 'Checking the song copy', rebuild: 'Restoring everything to the iPod' };
@@ -2208,14 +2323,14 @@ function reopen(change) {  // change() switches the route or the view; the new o
   remember(); change(); flowIdx = flowMem[memKey()] ?? null; render(); scroller().scrollTop = scrollMem[memKey()] ?? 0; drawRows();
 }
 function go(r) {
-  if (LIBRARY.includes(r)) { wheelCursor = lastLibrary = r; wheelLevel = 'view'; } else { wheelCursor = null; wheelLevel = 'menu'; }
+  if (MENU.includes(r)) { wheelCursor = lastLibrary = r; wheelLevel = 'view'; } else { wheelCursor = null; wheelLevel = 'menu'; }
   reopen(() => { searches[route] = query; route = r; location.hash = r; query = searches[r] ?? ''; $('q').value = query; picked.clear(); lastPick = null; });
 }
 function wheelStep(n) {
   if (!state.library) return;
-  if (wheelLevel === 'menu' || !LIBRARY.includes(route)) {
+  if (wheelLevel === 'menu' || !MENU.includes(route)) {
     if (!wheelCursor) { wheelCursor = lastLibrary; play('tick'); return renderFrame(); }  // the first turn brings the highlight back where it was
-    const next = LIBRARY[clamp(LIBRARY.indexOf(wheelCursor) + n, 0, LIBRARY.length - 1)];
+    const next = MENU[clamp(MENU.indexOf(wheelCursor) + n, 0, MENU.length - 1)];
     if (next !== wheelCursor) { wheelCursor = next; play('tick'); renderFrame(); }
   } else if (flowOn()) flowStep(n);
   else { scroller().scrollTop += n * 44; play('tick'); }
@@ -2670,7 +2785,10 @@ async function editSongs(songs, scope) {  // scope: 'song' | 'songs' | 'album'
   };
   const names = { song: ['title', 'artist', 'albumartist', 'album', 'year', 'genre'], songs: ['artist', 'albumartist', 'album', 'year', 'genre'], album: ['album', 'albumartist', 'year', 'genre'] }[scope];
   const fields = names.map(k => ({ ...all[k], placeholder: scope === 'song' ? '' : 'Keep' }));
-  const changes = v => Object.fromEntries(Object.entries(v).filter(([k, x]) => x && x !== (k === 'title' ? songs[0].title : same(k))));
+  const comp = songs.every(x => x.compilation), mixed = !comp && songs.some(x => x.compilation);
+  fields.push({ name: 'compilation', label: mixed ? 'Compilation (songs by various artists; some already are)' : 'Compilation (songs by various artists)', tick: true, value: comp });
+  const changes = v => ({ ...Object.fromEntries(Object.entries(v).filter(([k, x]) => k !== 'compilation' && x && x !== (k === 'title' ? songs[0].title : same(k)))),
+    ...(v.compilation !== undefined && (v.compilation !== comp || mixed && v.compilation) ? { compilation: v.compilation } : {}) });
   const f = await askForm({ title: scope === 'album' ? `Edit the album (${many})` : scope === 'song' ? 'Edit song' : `Edit ${many}`, ok: 'Save', lookup: scope === 'album' ? LOOKUP.album : LOOKUP.song, fields,
     check: v => { const c = changes(v); return c.year && !/^\d{4}$/.test(c.year) ? ['year', 'Give the year as four digits, like 1997.'] : Object.keys(c).length ? null : 'Nothing has changed yet. Change a field, or press Cancel.'; },
     message: `Leave a field empty to keep it as it is. Type a new value, pick one from your library as you type, or search MusicBrainz. A backup is saved first.${note}` });
@@ -2775,6 +2893,8 @@ function run(verb, kind, keys) {
   if (offline()) return notify('The iPod isn’t connected', 'Connect it and it will be read again. Nothing was changed.');
   if (verb === 'cover') return kind === 'artist' ? changePicture(keys[0]) : changeCover(albumKeyOf(songs[0]));
   if (verb === 'delete') return deleteSongs(songs);
+  if (verb === 'playlist') return addToPlaylist(songs);
+  if (verb === 'compilation') return markCompilation(songs);
   if (kind === 'artist') return one ? editArtist(keys[0]) : mergeArtists(keys);
   if (verb === 'group') return one ? groupSongs(songs) : sendToBoard(songs);
   return editSongs(songs, !one ? 'songs' : kind === 'song' ? 'song' : 'album');
@@ -2785,7 +2905,9 @@ function menuItems(kind, keys) {
   const named = songsFor(kind, keys[0])[0]?.album;
   return [['play', one ? 'Play' : `Play ${what}`], ...(one && (named || kind === 'album') ? [['open', kind === 'song' ? 'Show album' : 'Show songs']] : []),
     ['edit', one ? 'Edit…' : `Edit ${what}…`], ...(one && named ? [['cover', kind === 'song' ? 'Change album cover…' : 'Change cover…']] : []),
-    ['group', one && kind === 'album' ? 'Move songs to album…' : one ? 'Move to album…' : `Group ${what}…`], null, ['delete', one ? 'Delete…' : `Delete ${what}…`]];
+    ['group', one && kind === 'album' ? 'Move songs to album…' : one ? 'Move to album…' : `Group ${what}…`],
+    ['playlist', 'Add to playlist…'], ['compilation', keys.flatMap(k => songsFor(kind, k)).every(x => x.compilation) ? 'Not a compilation…' : 'Mark as compilation…'],
+    null, ['delete', one ? 'Delete…' : `Delete ${what}…`]];
 }
 let menuTarget = null;
 const closeMenu = () => $('itemMenu')?.remove();
@@ -2934,7 +3056,7 @@ function panelHtml(key) {
   return `<div class="sp" data-sp="${esc(key)}"><div class="sp-list">${songs.map(s => `<label class="sp-row" title="${esc(s.title)}"><input type="checkbox" data-sid="${s.id}">
       <span class="sp-num">${numbered && s.track ? `<span class="num">${s.track}</span>` : ''}<button class="sp-play" data-play="${s.id}" title="Play" aria-label="Play ${esc(s.title)}">${icon('play')}</button></span><span class="t">${esc(s.title || 'Untitled')}</span><span class="num">${fmtTime(s.seconds)}</span></label>`).join('')}</div>
     <div class="sp-bar"><span class="sp-count">${countLabel(0, songs.length)}</span><button class="sp-clear" data-clear hidden>Clear</button><span class="spacer"></span>
-      ${action('data-sact="play"', 'play', 'Play')}${songs[0].album ? action(`data-cover="${esc(key)}"`, 'frames', 'Change cover') : ''}${action('data-sact="edit"', 'edit', 'Edit')}${action('data-sact="move"', 'moveto', 'Move to album')}${action('data-sact="delete"', 'trash', 'Delete')}</div></div>`;
+      ${action('data-sact="play"', 'play', 'Play')}${songs[0].album ? action(`data-cover="${esc(key)}"`, 'frames', 'Change cover') : ''}${action('data-sact="edit"', 'edit', 'Edit')}${action('data-sact="move"', 'moveto', 'Move to album')}${action('data-sact="playlist"', 'playlist', 'Add to playlist')}${action('data-sact="delete"', 'trash', 'Delete')}</div></div>`;
 }
 function openAlbum(key, fromArtist = null) {
   const first = songsOf(key)[0], a = state.library.albums.find(x => `${x.artist} | ${x.album}` === key);
@@ -2983,6 +3105,7 @@ function songAction(act, panel) {
   if (act === 'play') return playSongs(inOrder(songs));
   if (act === 'delete') return deleteSongs(songs);
   if (act === 'move') return groupSongs(songs);
+  if (act === 'playlist') return addToPlaylist(songs);
   return editSongs(songs, !ids.length ? 'album' : ids.length === 1 ? 'song' : 'songs');
 }
 document.addEventListener('click', ev => { const b = ev.target.closest('[data-sact]'); if (b) songAction(b.dataset.sact, b.closest('.sp')); });

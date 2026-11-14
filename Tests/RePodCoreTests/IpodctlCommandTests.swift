@@ -54,6 +54,34 @@ struct IpodctlCommandTests {
         #expect(tracks.contains { $0.album == "Loveless" })
     }
 
+    @Test("playlist: made, filled, renamed and removed in one write each; the songs stay")
+    func playlistCommand() async throws {
+        let rig = try await WriteTests.rig(); defer { rig.cleanUp() }
+        let ids = try rig.onDisk().tracks.prefix(3).map(\.uniqueID)
+        func manifest(_ json: String) throws -> String {
+            let url = rig.root.appendingPathComponent("pl-\(UUID().uuidString.prefix(6)).json")
+            try Data(json.utf8).write(to: url)
+            return url.path
+        }
+        try await PlaylistCommand.run(call("playlist", try manifest(#"{"version": 1, "changes": [{"create": "Road trip", "add": [\#(ids[0]), \#(ids[1])]}]}"#), on: rig))
+        #expect(try rig.onDisk().editablePlaylists.isEmpty, "a preview writes nothing")
+
+        try await PlaylistCommand.run(call("playlist", try manifest(#"{"version": 1, "changes": [{"create": "Road trip", "add": [\#(ids[0]), \#(ids[1])]}]}"#), "--apply", on: rig))
+        let made = try #require(try rig.onDisk().editablePlaylists.first)
+        #expect(made.name == "Road trip")
+        #expect(made.entries.map(\.trackID) == [ids[0], ids[1]])
+
+        let hex = String(format: "%016llx", made.persistentID)
+        try await PlaylistCommand.run(call("playlist", try manifest(#"{"version": 1, "changes": [{"playlist": "\#(hex)", "add": [\#(ids[2])], "remove": [\#(ids[0])], "rename": "Evening"}]}"#), "--apply", on: rig))
+        let edited = try #require(try rig.onDisk().editablePlaylists.first)
+        #expect((edited.name, edited.entries.map(\.trackID)) == ("Evening", [ids[1], ids[2]]))
+
+        let count = try rig.onDisk().tracks.count
+        try await PlaylistCommand.run(call("playlist", try manifest(#"{"version": 1, "changes": [{"playlist": "\#(hex)", "delete": true}]}"#), "--apply", on: rig))
+        #expect(try rig.onDisk().editablePlaylists.isEmpty)
+        #expect(try rig.onDisk().tracks.count == count)
+    }
+
     @Test("add: choices made before adding reach the database in the same write, and a file left out stays out")
     func addWithChoices() async throws {
         let rig = try await WriteTests.rig(WriteTests.Fixture(hiRes: 14)); defer { rig.cleanUp() }
@@ -65,7 +93,8 @@ struct IpodctlCommandTests {
         try Data("""
         {"version": 1, "files": [
           {"path": "\(kept.path)", "set": {"title": "When You Sleep", "artist": "My Bloody Valentine", "albumartist": "My Bloody Valentine",
-                                            "album": "Loveless", "year": 1991, "track": 4, "tracks": 11}},
+                                            "album": "Loveless", "year": 1991, "track": 4, "tracks": 11},
+           "playlists": ["new:Shoegaze"]},
           {"path": "\(left.path)", "skip": true}]}
         """.utf8).write(to: choices)
         let before = try rig.onDisk().tracks.count
@@ -76,6 +105,8 @@ struct IpodctlCommandTests {
         #expect(tracks.count == before + 1)
         let added = try #require(tracks.first { $0.title == "When You Sleep" })
         #expect((added.album, added.albumArtist, added.year, added.trackNumber, added.totalTracks) == ("Loveless", "My Bloody Valentine", 1991, 4, 11))
+        let list = try #require(try rig.onDisk().editablePlaylists.first)
+        #expect((list.name, list.entries.map(\.trackID)) == ("Shoegaze", [added.uniqueID]), "the new song is in its new playlist, in the same write")
     }
 
 

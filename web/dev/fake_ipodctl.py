@@ -157,7 +157,11 @@ def dump(args):
     check_device()
     wait(.1)
     library = read()
-    out = {"version": 1, "deviceName": library["name"], "tracks": library["tracks"],
+    lists = [{"name": library["name"], "isMaster": True, "isSmart": False, "persistentID": "000000000000abcd",
+              "entries": [{"trackID": t["uniqueID"], "order": n} for n, t in enumerate(library["tracks"])]}]
+    lists += [{"name": p["name"], "isMaster": False, "isSmart": bool(p.get("smart")), "persistentID": p["persistentID"],
+               "entries": [{"trackID": i, "order": n} for n, i in enumerate(p["entries"])]} for p in library.get("playlists", [])]
+    out = {"version": 1, "deviceName": library["name"], "tracks": library["tracks"], "playlists": lists,
            "albumsOutOfPlace": [{"album": a, "albumArtist": b} for a, b in library["outOfPlace"]]}
     text = json.dumps(out)
     Path(flag(args, "--out")).write_text(text)
@@ -347,6 +351,8 @@ def remove(args):
         print("\n  That was a preview. To write: add --apply")
         return
     library["tracks"] = [t for t in library["tracks"] if t["uniqueID"] not in wanted]
+    for playlist in library.get("playlists", []):  # a song that leaves the iPod leaves its lists too
+        playlist["entries"] = [i for i in playlist["entries"] if i not in wanted]
     write(library, f"removing {len(gone)} tracks", [t["title"] for t in gone[:20]])
     print(f"  Deleted files: {len(gone)}")
 
@@ -479,6 +485,7 @@ def add(args):
             if choice.get("cover") and not Path(choice["cover"]).is_file():
                 raise Refused(f"the cover {choice['cover']} is not there")
             entry.update({k: v for k, v in (choice.get("set") or {}).items() if not (k == "title" and not v)})
+            entry["playlists"] = choice.get("playlists") or []
             kept.append(entry)
         tagged = kept
         if not tagged:
@@ -498,8 +505,65 @@ def add(args):
                      entry.get("compilation", False))
         added.update(totalTracks=entry.get("tracks", 0), discNumber=entry.get("disc", 0), totalDiscs=entry.get("discs", 0))
         library["tracks"].append(added)
+        for target in entry.get("playlists", []):  # into its playlists in the same write; a new one is made once
+            lists = library.setdefault("playlists", [])
+            found = next((p for p in lists if p["persistentID"] == target or target.startswith("new:") and p.get("madeFor") == target), None)
+            if found is None and target.startswith("new:"):
+                found = {"persistentID": "%016x" % random.getrandbits(64), "name": target[4:], "entries": [], "madeFor": target}
+                lists.append(found)
+            if found is not None:
+                found["entries"].append(added["uniqueID"])
+    for p in library.get("playlists", []):
+        p.pop("madeFor", None)
     write(library, "ipodctl add", [t["title"] for t in tagged])
     print(f"  Added tracks: {len(tagged)}")
+
+
+def playlist(args):
+    check_device()
+    library = read()
+    lists = library.setdefault("playlists", [])
+    songs = {t["uniqueID"]: t for t in library["tracks"]}
+    if "--list" in args:
+        for p in lists:
+            print(f"  {p['persistentID']}  {p['name']}  {len(p['entries'])} songs" + ("  (smart)" if p.get("smart") else ""))
+        return
+    changes = json.loads(Path(positional(args)[0]).read_text())["changes"]
+    lines = []
+    for change in changes:
+        if "create" in change:
+            ids = change.get("add", [])
+            for i in ids:
+                if i not in songs:
+                    raise Refused(f"song {i} is not on the iPod")
+            lists.append({"persistentID": "%016x" % random.getrandbits(64), "name": change["create"], "entries": list(dict.fromkeys(ids))})
+            lines.append(f"new playlist “{change['create']}” with {len(ids)} songs")
+            continue
+        target = next((p for p in lists if p["persistentID"] == change.get("playlist")), None)
+        if target is None:
+            raise Refused(f"no playlist {change.get('playlist')}")
+        if target.get("smart"):
+            raise Refused(f"{target['name']} is the list of all songs or a smart playlist, and is not changed by hand")
+        if "add" in change:
+            new = [i for i in dict.fromkeys(change["add"]) if i not in target["entries"]]
+            target["entries"] += new
+            lines.append(f"“{target['name']}”: {len(new)} songs added")
+        if "remove" in change:
+            target["entries"] = [i for i in target["entries"] if i not in change["remove"]]
+            lines.append(f"“{target['name']}”: {len(change['remove'])} songs taken out (they stay on the iPod)")
+        if "rename" in change:
+            lines.append(f"“{target['name']}” renamed “{change['rename']}”")
+            target["name"] = change["rename"]
+        if change.get("delete"):
+            lists.remove(target)
+            lines.append(f"“{target['name']}” removed (its songs stay on the iPod)")
+    report("Playlists", [("iPod", f"{library['name']} - iPod classic"), ("changes", str(len(changes))), ("writing", writing())])
+    for line in lines:
+        print(f"  {line}")
+    if "--apply" not in args:
+        print("\n  That was a preview. To write: add --apply")
+        return
+    write(library, f"ipodctl playlist ({len(changes)} changes)", lines)
 
 
 def backup(args):
@@ -632,12 +696,16 @@ def init(args):
     (ROOT / "backups").mkdir(exist_ok=True)
     DATABASE.parent.mkdir(parents=True)
     DATABASE.write_bytes(b"mhbd")
-    LIBRARY.write_text(json.dumps({"name": "Fake iPod classic", "tracks": tracks, "covers": covers, "outOfPlace": out_of_place}))
+    playlists = [] if scenario == "empty" else [  # as a Classic has them: a list made on the iPod, one with nothing in it, and a smart one
+        {"persistentID": "20424c193f6ce4af", "name": "On-The-Go 1", "entries": [t["uniqueID"] for t in tracks[:3]]},
+        {"persistentID": "676db5bb0d127690", "name": "Road trip", "entries": []},
+        {"persistentID": "0f3c8a2219a4be01", "name": "Recently Played", "smart": True, "entries": [t["uniqueID"] for t in tracks[3:5]]}]
+    LIBRARY.write_text(json.dumps({"name": "Fake iPod classic", "tracks": tracks, "covers": covers, "outOfPlace": out_of_place, "playlists": playlists}))
     print(f"{len(tracks)} songs in {ROOT}")
 
 
 COMMANDS = {"init": init, "dump": dump, "artwork": artwork, "apply": apply, "retag": retag, "edit": edit, "regroup": regroup, "remove": remove,
-            "add": add, "info": info, "diagnose": diagnose, "audio": audio, "fix-sort": fix_sort, "backup": backup, "snapshots": snapshots, "verify": verify, "restore": restore}
+            "add": add, "playlist": playlist, "info": info, "diagnose": diagnose, "audio": audio, "fix-sort": fix_sort, "backup": backup, "snapshots": snapshots, "verify": verify, "restore": restore}
 
 
 def main() -> None:

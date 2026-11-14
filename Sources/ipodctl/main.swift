@@ -52,6 +52,9 @@ ipodctl - reads and writes an iPod's library. The web page runs it; it can be us
                         setting album and albumartist moves songs into another album
   retag MANIFEST.json [--apply]
                         different values for different songs, in one write
+  playlist --list       the playlists and how many songs each has
+  playlist MANIFEST.json [--apply]
+                        playlists made, filled, emptied, renamed or removed, in one write
   regroup [--apply]     albums whose records or table place fell behind their songs put back together
   remove (--dead | --id N,N | --orphan-albums) [--apply]
                         removing tracks from the database with remapping of the tables
@@ -81,6 +84,7 @@ case "apply": ApplyCommand.run
 case "dump": DumpCommand.run
 case "edit": EditCommand.run
 case "retag": RetagCommand.run
+case "playlist": PlaylistCommand.run
 case "regroup": RegroupCommand.run
 case "add": AddCommand.run
 case "remove": RemoveCommand.run

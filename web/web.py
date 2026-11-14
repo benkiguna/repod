@@ -43,11 +43,11 @@ CONVERTED = enrich.HOME / "playing"  # lossless songs a browser can play, kept f
 CONVERTED_LIMIT = 2_000_000_000
 AUDIO_KINDS = {".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".m4b": "audio/mp4", ".m4p": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav", ".aif": "audio/aiff", ".aiff": "audio/aiff"}
 IMAGE_KINDS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".heic": "image/heic", ".tif": "image/tiff", ".tiff": "image/tiff", ".webp": "image/webp"}
-WRITES = {"write", "cover", "edit", "remove", "add", "regroup", "metawrite", "restore", "rebuild", "convert", "sortfix"}  # the jobs that change the iPod
+WRITES = {"write", "cover", "edit", "remove", "add", "regroup", "metawrite", "restore", "rebuild", "convert", "sortfix", "playlist"}  # the jobs that change the iPod
 STOPPABLE = {"copy", "copycheck", "artistscan", "lookup", "metascan", "addscan"}  # these only read, so they can stop between two items; a write never does
 NEEDS_IPOD = {"/api/preview", "/api/write", "/api/add-preview", "/api/add", "/api/add-lookup", "/api/backup-create", "/api/backup-clean", "/api/rebuild", "/api/health", "/api/audio-fix", "/api/fix-sort", "/api/backup-verify", "/api/backup-restore",
               "/api/meta-preview", "/api/meta-apply", "/api/cover-set", "/api/regroup-preview", "/api/regroup", "/api/songs-retag", "/api/songs-edit",
-              "/api/songs-remove", "/api/copy-songs", "/api/eject"}
+              "/api/songs-remove", "/api/copy-songs", "/api/eject", "/api/playlist-edit", "/api/playlist-preview"}
 KEPT = enrich.HOME / "kept-both.json"
 STARRED = enrich.HOME / "starred-backups.json"
 ADD_REVIEW = enrich.HOME / "add-review.json"  # what MusicBrainz said about songs not yet on the iPod, and what was chosen for each
@@ -103,6 +103,7 @@ COUNTED = {  # how many: where `ipodctl` says it, and how to say it to the user
     "convert": (r"To transcode: (\d+)", "Converted {}", "song", "songs"),
     "sortfix": (r"^tracks\s+(\d+)", "Repaired {}", "song", "songs"),
     "copycheck": (r"All (\d+) files match", "Checked {}: every one matches", "file", "files"),
+    "playlist": (r"^changes\s+(\d+)", "Made {} to playlists", "change", "changes"),
 }
 
 
@@ -435,7 +436,16 @@ def build_library(dump: dict, missing: list, art: dict | None = None) -> dict:
         "hints": tidy.hints(songs, splits, doubles),
         "duplicates": tidy.duplicates(songs),
         "outOfPlace": [{"album": a["album"], "artist": a["albumArtist"]} for a in dump.get("albumsOutOfPlace") or []],
+        "playlists": playlists_of(dump),
     }
+
+
+def playlists_of(dump: dict) -> list:
+    """The iPod's playlists, not the list of all songs: id, name, songs in their order, and whether the iPod fills it from rules."""
+    known = {t.get("uniqueID") for t in dump["tracks"]}
+    return [{"id": p["persistentID"], "name": p.get("name") or "Untitled", "smart": bool(p.get("isSmart")),
+             "songs": [e["trackID"] for e in p.get("entries") or [] if e["trackID"] in known]}
+            for p in dump.get("playlists") or [] if not p.get("isMaster")]
 
 
 class App:
@@ -654,6 +664,14 @@ class App:
         enrich.HOME.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"version": 1, "songs": songs}))
         return self.run_ctl("edit" if write else "edit-preview", ["retag", str(path)] + (["--apply"] if write else []),
+                            self.try_load if write else None)
+
+    def edit_playlists(self, changes: list, write: bool):
+        """Playlists made, filled, emptied, renamed or removed, through `ipodctl playlist`."""
+        path = enrich.HOME / "playlist-manifest.json"
+        enrich.HOME.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"version": 1, "changes": changes}))
+        return self.run_ctl("playlist" if write else "playlist-preview", ["playlist", str(path)] + (["--apply"] if write else []),
                             self.try_load if write else None)
 
     def prepare_cover(self, path: str, url: str) -> str:
@@ -1058,11 +1076,53 @@ def added_song(listed: dict) -> dict:
     return song
 
 
+PLAYLIST_ID = re.compile(r"^[0-9a-f]{16}$")
+
+
+def playlist_changes(library: dict | None, given) -> list | str:
+    """The page's playlist changes, checked against the library: only its songs, only lists that can be changed by hand."""
+    if not isinstance(given, list) or not given or len(given) > 200:
+        return "changes must be a list"
+    lists = {p["id"]: p for p in (library or {}).get("playlists", [])}
+    songs = {s["id"] for s in (library or {}).get("songs", [])}
+    made = set()
+    ids = lambda x: isinstance(x, list) and len(x) <= 20000 and all(isinstance(i, int) and not isinstance(i, bool) and i in songs for i in x)
+    for c in given:
+        if not isinstance(c, dict) or not set(c) <= {"create", "playlist", "add", "remove", "rename", "delete"}:
+            return "unknown change"
+        if "add" in c and not ids(c["add"]) or "remove" in c and not ids(c["remove"]):
+            return "a song that is not on the iPod"
+        if "create" in c:
+            if not isinstance(c["create"], str) or not c["create"].strip() or len(c["create"]) > 200 or set(c) - {"create", "add"}:
+                return "a new playlist needs a name"
+            made.add(c["create"].strip())
+            continue
+        target = lists.get(c.get("playlist"))
+        if target is None or target["smart"]:
+            return "a playlist that is not on the iPod, or one the iPod fills itself"
+        if "rename" in c and not (isinstance(c["rename"], str) and c["rename"].strip() and len(c["rename"]) <= 200):
+            return "a playlist needs a name"
+        if "delete" in c and c["delete"] is not True:
+            return "delete must be true"
+    return given
+
+
+def added_playlists(library: dict | None, given) -> list | str:
+    """Playlists a song being added goes into: an editable one on the iPod, or new:Name."""
+    lists = {p["id"] for p in (library or {}).get("playlists", []) if not p["smart"]}
+    if not isinstance(given, list) or len(given) > 50:
+        return "playlists must be a list"
+    for t in given:
+        if not isinstance(t, str) or not (t in lists or t.startswith("new:") and t[4:].strip() and len(t) <= 204):
+            return "a playlist that is not on the iPod"
+    return given
+
+
 TEXT_FIELDS = {"title", "artist", "albumartist", "album", "genre", "composer"}
 NUMBER_FIELDS = {"year", "track", "tracks", "disc", "discs"}
 
 
-def add_choices(review: dict, given) -> list | str:
+def add_choices(review: dict, given, library: dict | None = None) -> list | str:
     """The page's choices for the songs being added, checked against the review: only its own files, known fields, and covers it prepared.
     The manifest `ipodctl add --manifest` reads, or what is wrong with them."""
     if not isinstance(given, list) or len(given) > 5000:
@@ -1080,6 +1140,11 @@ def add_choices(review: dict, given) -> list | str:
         choice = {"path": entry["path"]}
         if entry.get("skip") is True:
             choice["skip"] = True
+        if entry.get("playlists"):
+            lists = added_playlists(library, entry["playlists"])
+            if isinstance(lists, str):
+                return lists
+            choice["playlists"] = lists
         if values:
             choice["set"] = values
         cover = entry.get("cover")
@@ -1314,7 +1379,7 @@ def make_handler(app: App, port: int):
                     review = json.loads(ADD_REVIEW.read_text()) if ADD_REVIEW.exists() else {}
                     if review.get("version") != 2 or review.get("path") != str(song_path):
                         return self._json({"error": "Look these songs up again: that answer was for another folder."}, 400)
-                    choices = add_choices(review, body["songs"])
+                    choices = add_choices(review, body["songs"], app.library)
                     if isinstance(choices, str):
                         return self._json({"error": choices}, 400)
                     if body["songs"] and all(c.get("skip") for c in choices) and len(choices) == len(review["songs"]):
@@ -1325,6 +1390,13 @@ def make_handler(app: App, port: int):
                 if not song_path.exists():
                     return self._json({"error": f"{song_path} does not exist"}, 400)
                 started = app.add_lookup(str(song_path))
+            elif path in ("/api/playlist-edit", "/api/playlist-preview"):
+                changes = playlist_changes(app.library, body.get("changes"))
+                if isinstance(changes, str):
+                    return self._json({"error": changes}, 400)
+                if path == "/api/playlist-edit" and body.get("confirm") is not True:
+                    return self._json({"error": "playlist changes need confirm: true"}, 400)
+                started = app.edit_playlists(changes, path == "/api/playlist-edit")
             elif path == "/api/add-choices":
                 if not ADD_REVIEW.exists() or not isinstance(body.get("choices"), dict) or len(json.dumps(body["choices"])) > 2_000_000:
                     return self._json({"error": "no review to keep choices for"}, 400)

@@ -23,6 +23,7 @@ struct AdditionPhase: WritePhase {
         var problems = outcome.failed
         let placed = additions.filter { $0.placement != nil && outcome.done.contains($0.id) }
         library = Self.placing(placed, ids: outcome.uniqueIDs, in: outcome.library, problems: &problems)
+        library = Self.filing(additions.filter { outcome.done.contains($0.id) }, ids: outcome.uniqueIDs, in: library, problems: &problems)
         ledger.completed.additions.formUnion(outcome.done)
         ledger.addedTracks += outcome.done.count
         ledger.additionProblems += problems
@@ -30,6 +31,30 @@ struct AdditionPhase: WritePhase {
         ledger.coversWritten += outcome.covers
         ledger.coverImages.merge(outcome.coverImages) { _, new in new }
         if outcome.covers > 0 { ledger.artworkChanged = true }
+    }
+
+    /// Added songs into the playlists chosen for them, in the order they were added. A new playlist is made once,
+    /// with every song that names it. A playlist that cannot take them leaves the songs on the iPod, and says why.
+    static func filing(_ added: [PendingAddition], ids: [UUID: UInt32], in library: ITLibrary, problems: inout [WriteProblem]) -> ITLibrary {
+        var wanted: [(PlaylistTarget, [UInt32])] = []
+        for addition in added {
+            guard let id = ids[addition.id] else { continue }
+            for target in addition.playlists {
+                if let at = wanted.firstIndex(where: { $0.0 == target }) { wanted[at].1.append(id) } else { wanted.append((target, [id])) }
+            }
+        }
+        var result = library
+        for (target, songs) in wanted {
+            do {
+                switch target {
+                case .new(let name): result = try result.creatingPlaylist(named: name, trackIDs: songs)
+                case .existing(let id): result = try result.addingTracks(songs, toPlaylist: id)
+                }
+            } catch {
+                problems.append(WriteProblem("playlist \(target)", .notPlaced(error)))
+            }
+        }
+        return result
     }
 
     /// Tracks with a place in an album are moved to where they were dropped. The

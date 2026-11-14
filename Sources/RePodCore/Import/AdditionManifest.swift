@@ -15,7 +15,8 @@ import ITDBKit
 ///
 /// The fields are those of `retag`: title, artist, albumartist, album, genre, composer (an empty
 /// value clears it; a song always keeps a title), and year, track, tracks, disc, discs, compilation.
-/// `cover` is an image for the album, or "" for none; without it the album takes what the files
+/// `playlists` names playlists the song goes into in the same write: ids as `dump` writes them, or "new:Name"
+/// for a new one, made once for every song that names it. `cover` is an image for the album, or "" for none; without it the album takes what the files
 /// have. As always when adding, a cover is only given to an album that is not on the iPod yet.
 /// A file the manifest does not name goes in as its tags say.
 public struct AdditionManifest: Decodable, Sendable {
@@ -27,6 +28,8 @@ public struct AdditionManifest: Decodable, Sendable {
         public var skip: Bool?
         public var set: Fields?
         public var cover: String?
+        /// Playlists to put the song into: ids as `dump` writes them, or "new:Name".
+        public var playlists: [String]?
     }
 
     public struct Fields: Decodable, Sendable {
@@ -39,12 +42,14 @@ public struct AdditionManifest: Decodable, Sendable {
         case unreadable(String)
         case version(Int)
         case missingCover(String)
+        case playlist(String)
 
         public var description: String {
             switch self {
             case .unreadable(let why): "the choices file cannot be read: \(why)"
             case .version(let v): "the choices file is version \(v); this ipodctl reads version 1"
             case .missingCover(let path): "the cover \(path) is not there"
+            case .playlist(let text): "\u{201C}\(text)\u{201D} is not a playlist id or new:Name"
             }
         }
     }
@@ -64,6 +69,8 @@ public struct AdditionManifest: Decodable, Sendable {
         public var candidates: [AudioImport.Candidate]
         public var skipped: [String] = []
         public var unknown: [String] = []
+        /// The playlists each kept candidate goes into, by candidate id.
+        public var playlists: [UUID: [PlaylistTarget]] = [:]
     }
 
     public func applied(to candidates: [AudioImport.Candidate]) throws -> Outcome {
@@ -89,6 +96,12 @@ public struct AdditionManifest: Decodable, Sendable {
                 let url = URL(fileURLWithPath: (image as NSString).expandingTildeInPath)
                 guard FileManager.default.fileExists(atPath: url.path) else { throw ManifestError.missingCover(image) }
                 candidate.chosenCover = url
+            }
+            if let names = choice.playlists, !names.isEmpty {
+                outcome.playlists[candidate.id] = try names.map { text in
+                    guard let target = PlaylistTarget(text) else { throw ManifestError.playlist(text) }
+                    return target
+                }
             }
             outcome.candidates.append(candidate)
         }
